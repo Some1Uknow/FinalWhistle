@@ -1,0 +1,16 @@
+# Local and generated artifacts are rebuilt by Railway and must never be sent
+# in a source upload.
+node_modules/
+target/
+.anchor/
+dist/
+.next/
+apps/web/.next/
+.data/
+apps/web/.data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+.git/

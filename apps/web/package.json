@@ -1,0 +1,41 @@
+{
+  "name": "@final-whistle/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "tsx --test test/**/*.test.ts",
+    "db:migrate": "tsx scripts/migrate-database.ts",
+    "txline:smoke": "tsx scripts/txline-smoke.ts",
+    "reconcile:onchain": "tsx scripts/reconcile-onchain.ts",
+    "program:initialize-config": "tsx scripts/initialize-program-config.ts"
+  },
+  "dependencies": {
+    "@solana/wallet-adapter-base": "^0.9.27",
+    "@solana/wallet-adapter-phantom": "^0.9.29",
+    "@solana/wallet-adapter-react": "^0.15.39",
+    "@solana/wallet-adapter-solflare": "^0.6.33",
+    "@solana/web3.js": "^1.98.0",
+    "bs58": "^6.0.0",
+    "dotenv": "^16.4.7",
+    "lucide-react": "^0.468.0",
+    "next": "^15.1.4",
+    "pg": "^8.22.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tweetnacl": "^1.0.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "pg-mem": "^3.0.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3"
+  }
+}

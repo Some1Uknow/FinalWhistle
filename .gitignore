@@ -1,0 +1,17 @@
+node_modules/
+target/
+.anchor/
+dist/
+.next/
+.data/
+apps/web/.next/
+apps/web/.data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+.vercel/
+docs/
+.vercel

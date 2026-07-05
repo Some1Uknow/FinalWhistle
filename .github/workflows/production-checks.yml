@@ -1,0 +1,67 @@
+name: Production Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: stable
+
+      - uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c
+        with:
+          tool: cargo-audit
+
+      - name: Install Solana CLI
+        uses: solana-developers/github-workflows/.github/actions/setup-solana@6b27a8ccef6be708d7f11669af7007479ab42751
+        with:
+          solana-version: stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build backend
+        run: pnpm build
+
+      - name: Test backend
+        run: pnpm test
+
+      - name: Audit production Node dependencies
+        run: pnpm audit --prod
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+
+      - name: Build Anchor program
+        run: pnpm anchor:build
+
+      - name: Remove generated deploy keypair
+        run: rm -f target/deploy/final_whistle-keypair.json
+
+      - name: Public artifact scan
+        run: |
+          matches="$(find . -maxdepth 4 \( -name '.env' -o -name '*.db' -o -name '*.db-shm' -o -name '*.db-wal' -o -name '*keypair*.json' -o -name '*.pem' -o -name '*.key' -o -name '*.secret' -o -name '*.p12' -o -name '*.pfx' -o -name 'credentials.json' -o -name 'service-account.json' \) -type f -print)"
+          if [ -n "$matches" ]; then
+            echo "$matches"
+            exit 1
+          fi

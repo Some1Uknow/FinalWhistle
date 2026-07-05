@@ -1,0 +1,34 @@
+{
+  "name": "final-whistle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.27.0",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "build": "pnpm --filter @final-whistle/web build && pnpm --filter @final-whistle/backend build",
+    "test": "pnpm --filter @final-whistle/web test && pnpm --filter @final-whistle/backend test",
+    "dev": "pnpm --filter @final-whistle/web dev",
+    "start": "pnpm --filter @final-whistle/web start",
+    "dev:web": "pnpm --filter @final-whistle/web dev",
+    "txline:smoke": "pnpm --filter @final-whistle/web txline:smoke",
+    "release:check": "node scripts/release-check.mjs",
+    "anchor:build": "anchor build"
+  },
+  "workspaces": [
+    "backend",
+    "apps/web"
+  ],
+  "pnpm": {
+    "overrides": {
+      "uuid": "11.1.1",
+      "postcss": "8.5.18"
+    }
+  },
+  "devDependencies": {
+    "@coral-xyz/anchor": "^0.31.0",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,15 @@
+# Vercel builds the web service from source. Keep local outputs, keys, and
+# transient data out of every deployment upload.
+node_modules/
+target/
+.anchor/
+.next/
+apps/web/.next/
+.data/
+apps/web/.data/
+.vercel/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
