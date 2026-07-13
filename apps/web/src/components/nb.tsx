@@ -1,0 +1,122 @@
+import Link from "next/link";
+import { ExternalLink, ShieldCheck } from "lucide-react";
+import type { MarketRecord } from "@/server/domain";
+
+export function SectionTag({ children }: { children: React.ReactNode }) {
+  return <span className="tag">{children}</span>;
+}
+
+export function StatusBadge({ status, stale }: { status?: string; stale?: boolean }) {
+  const state = stale ? "STALE" : status ?? "OPEN";
+  const label = stale
+    ? "Updating"
+    : ({ OPEN: "Open to pick", LOCKED: "Match live", SETTLED: "Full time", CANCELLED: "Called off" } as Record<string, string>)[state] ?? state;
+  return <span className={`status ${state.toLowerCase()}`}>{label}</span>;
+}
+
+export function MarketCard({ market, fixtureName, stale }: { market: MarketRecord; fixtureName?: string; stale?: boolean }) {
+  const choices = marketChoices(market);
+  const hasPicks = hasAnyPick(market);
+
+  return (
+    <article className="challenge-card">
+      <div className="challenge-card-top">
+        <span className="challenge-type">{market.template === "MATCH_WINNER" ? "Winner call" : "Goals call"}</span>
+        <StatusBadge status={market.status} stale={stale} />
+      </div>
+      <p className="challenge-match">{fixtureName ?? `Match ${market.fixtureId}`}</p>
+      <h3>{challengeQuestion(market)}</h3>
+      <div className="challenge-picks" aria-label="Available choices">
+        <span>{choices.yes}</span>
+        <i>or</i>
+        <span>{choices.no}</span>
+      </div>
+      <p className="challenge-detail">
+        {market.status === "OPEN"
+          ? hasPicks ? "Friends are already on the board. Pick your side." : "Be the first friend to make a call."
+          : market.status === "LOCKED" ? "Picks are closed while the match plays out." : "The final word is waiting inside."}
+      </p>
+      <div className="challenge-card-footer">
+        <span>{market.status === "OPEN" ? `Closes ${formatDate(market.lockTs)}` : formatDate(market.lockTs)}</span>
+        <Link href={`/markets/${market.id}`}>Open challenge <span aria-hidden="true">→</span></Link>
+      </div>
+    </article>
+  );
+}
+
+export function ProofReceipt({ receipt }: { receipt: Record<string, unknown> }) {
+  const status = String(receipt.status ?? "PENDING");
+  const verified = status === "SETTLED" || status === "CANCELLED";
+  const result = receipt.winningSide ? `${String(receipt.winningSide)} side` : verified ? "Result recorded" : "Still waiting";
+
+  return (
+    <section className="nb-card accent-green receipt-card">
+      <SectionTag>Match result</SectionTag>
+      <h1>{verified ? "Result checked." : "Still in play."}</h1>
+      <p className="receipt-lead">{verified ? "The final whistle has a recorded result for this challenge." : "This challenge will update once the match has a clear final result."}</p>
+      <div className="metric-row">
+        <span>Match status</span>
+        <strong>{({ SETTLED: "Full time", CANCELLED: "Called off" } as Record<string, string>)[status] ?? "In play"}</strong>
+      </div>
+      <div className="metric-row">
+        <span>Result</span>
+        <strong>{result}</strong>
+      </div>
+      <details className="receipt-details">
+        <summary>Technical receipt</summary>
+        <div className="metric-row">
+          <span>Match sequence</span>
+          <strong className="mono">{String(receipt.txlineSeq ?? "Waiting")}</strong>
+        </div>
+        <div className="proof-box mono">{String(receipt.proofHash ?? "No result receipt has been recorded yet")}</div>
+      </details>
+      <ShieldCheck size={42} aria-hidden="true" />
+    </section>
+  );
+}
+
+export function ExplorerLink({ signature }: { signature?: string }) {
+  if (!signature) return null;
+  return (
+    <a
+      className="nb-button"
+      href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <ExternalLink size={16} aria-hidden="true" />
+      View receipt
+    </a>
+  );
+}
+
+export function truncate(value: string, chars = 4) {
+  return value.length <= chars * 2 + 3 ? value : `${value.slice(0, chars)}...${value.slice(-chars)}`;
+}
+
+function marketChoices(market: MarketRecord) {
+  if (market.template === "MATCH_WINNER") return { yes: "Home side", no: "Other side" };
+  const line = (market.predicate.thresholdMilli / 1000).toLocaleString("en", { maximumFractionDigits: 2 });
+  return { yes: `Over ${line}`, no: `${line} or fewer` };
+}
+
+function challengeQuestion(market: MarketRecord) {
+  if (market.template === "MATCH_WINNER") return "Who takes this one?";
+  const line = (market.predicate.thresholdMilli / 1000).toLocaleString("en", { maximumFractionDigits: 2 });
+  return `More than ${line} goals?`;
+}
+
+function hasAnyPick(market: MarketRecord) {
+  try {
+    return BigInt(market.yesStake) > 0n || BigInt(market.noStake) > 0n;
+  } catch {
+    return false;
+  }
+}
+
+function formatDate(value?: string) {
+  if (!value) return "Time TBD";
+  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
+  if (Number.isNaN(date.getTime())) return "Time TBD";
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+}
