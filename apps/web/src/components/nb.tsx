@@ -16,7 +16,6 @@ export function StatusBadge({ status, stale }: { status?: string; stale?: boolea
 
 export function MarketCard({ market, fixtureName, stale }: { market: MarketRecord; fixtureName?: string; stale?: boolean }) {
   const choices = marketChoices(market);
-  const hasPicks = hasAnyPick(market);
 
   return (
     <article className="challenge-card">
@@ -31,11 +30,6 @@ export function MarketCard({ market, fixtureName, stale }: { market: MarketRecor
         <i>or</i>
         <span>{choices.no}</span>
       </div>
-      <p className="challenge-detail">
-        {market.status === "OPEN"
-          ? hasPicks ? "Friends are already on the board. Pick your side." : "Be the first friend to make a call."
-          : market.status === "LOCKED" ? "Picks are closed while the match plays out." : "The final word is waiting inside."}
-      </p>
       <div className="challenge-card-footer">
         <span>{market.status === "OPEN" ? `Closes ${formatDate(market.lockTs)}` : formatDate(market.lockTs)}</span>
         <Link href={`/markets/${market.id}`}>Open challenge <span aria-hidden="true">→</span></Link>
@@ -108,14 +102,6 @@ function challengeQuestion(market: MarketRecord) {
   if (market.template === "MATCH_WINNER") return "Will the home side win?";
   const line = (market.predicate.thresholdMilli / 1000).toLocaleString("en", { maximumFractionDigits: 2 });
   return `More than ${line} goals?`;
-}
-
-function hasAnyPick(market: MarketRecord) {
-  try {
-    return BigInt(market.yesStake) > 0n || BigInt(market.noStake) > 0n;
-  } catch {
-    return false;
-  }
 }
 
 function formatDate(value?: string) {

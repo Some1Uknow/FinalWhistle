@@ -7,7 +7,7 @@ import type { FixtureView } from "@/server/db";
 
 export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: FixtureView[] }) {
   const [fixtures, setFixtures] = useState(initialFixtures);
-  const [status, setStatus] = useState(initialFixtures.length ? "A few matches are ready to browse." : "Looking for the next match…");
+  const [status, setStatus] = useState(initialFixtures.length ? "Fixtures available." : "Checking fixtures…");
 
   const refresh = useCallback(async () => {
     try {
@@ -16,7 +16,7 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
       if (!response.ok) throw new Error(payload.message ?? "Fixtures are unavailable");
       setFixtures(payload.fixtures ?? []);
       const count = payload.fixtures?.length ?? 0;
-      setStatus(count ? `${count} ${count === 1 ? "match is" : "matches are"} waiting for a call.` : "Nothing on the board just yet.");
+      setStatus(count ? `${count} ${count === 1 ? "fixture" : "fixtures"} available.` : "No fixtures available.");
     } catch {
       setStatus("The match board couldn't refresh just now. Try again in a moment.");
     }
@@ -37,10 +37,10 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
     <section className="fixture-board" aria-labelledby="fixture-board-title">
       <div className="board-heading">
         <div>
-          <p className="eyebrow">Pick your game</p>
-          <h3 id="fixture-board-title">Matches to call</h3>
+          <p className="eyebrow">Available</p>
+          <h3 id="fixture-board-title">Fixture list</h3>
         </div>
-        <span className="board-count">{fixtures.length} on deck</span>
+        <span className="board-count">{fixtures.length} total</span>
       </div>
       <p className="board-status" aria-live="polite">{status}</p>
       {fixtures.length > 0 ? (
@@ -51,8 +51,8 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
         <div className="empty-match-board">
           <span className="empty-ball" aria-hidden="true">⚽</span>
           <div>
-            <h3>No match on the board right now.</h3>
-            <p>The next game will show up here as soon as it&apos;s ready for a call.</p>
+            <h3>No fixtures available</h3>
+            <p>Refresh the match feed and try again.</p>
           </div>
         </div>
       )}

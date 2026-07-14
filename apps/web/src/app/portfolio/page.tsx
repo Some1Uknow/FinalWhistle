@@ -9,7 +9,7 @@ export default function PortfolioPage() {
     <main className="page">
       <section className="section-head">
         <div>
-          <SectionTag>My match day</SectionTag>
+          <SectionTag>Account</SectionTag>
           <h1>Your picks</h1>
         </div>
       </section>

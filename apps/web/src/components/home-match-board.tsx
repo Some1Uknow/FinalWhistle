@@ -11,9 +11,9 @@ export async function MatchDirectory() {
   return (
     <>
       <section className="directory-hero" aria-labelledby="matches-title">
-        <p className="eyebrow">Match board</p>
-        <h1 id="matches-title">Find the match worth talking about.</h1>
-        <p>Browse the fixtures, pick your angle, and start a challenge when you&apos;re ready.</p>
+        <p className="eyebrow">Fixtures</p>
+        <h1 id="matches-title">Matches</h1>
+        <p>Select a fixture to view or create a challenge.</p>
       </section>
       <section className="directory-content" aria-label="Available matches">
         <FixtureRefreshPanel />
@@ -33,15 +33,15 @@ export async function ChallengeDirectory() {
   return (
     <>
       <section className="directory-hero directory-hero-green" aria-labelledby="challenges-title">
-        <p className="eyebrow">Open challenges</p>
-        <h1 id="challenges-title">See what everyone&apos;s calling.</h1>
-        <p>Pick up an open side, follow a locked call, or start one from a match that&apos;s on the board.</p>
+        <p className="eyebrow">Markets</p>
+        <h1 id="challenges-title">Challenges</h1>
+        <p>Open, locked, and settled match calls.</p>
       </section>
       <section className="directory-content" aria-label="Challenges on the board">
         <div className="section-head friendly-head">
           <div>
-            <p className="eyebrow">On the board</p>
-            <h2>Friendly calls, all in one place.</h2>
+            <p className="eyebrow">All challenges</p>
+            <h2>Market board</h2>
           </div>
           {markets.length > 0 && <SectionTag>{markets.length} total</SectionTag>}
         </div>

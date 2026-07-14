@@ -42,10 +42,6 @@ export default async function FixturePage({
               <span>Match status</span>
               <strong>{fixture.stale ? "Checking for an update" : "Ready to call"}</strong>
             </div>
-            <div className="metric-row">
-              <span>Make a challenge</span>
-              <strong>{!fixture.stale ? "Ready when you are" : "Wait for a fresh update"}</strong>
-            </div>
           </div>
           <div className="section-head">
             <h2>Calls on this match</h2>
@@ -58,8 +54,8 @@ export default async function FixturePage({
           </div>
           {markets.length === 0 && (
             <div className="nb-card accent-cyan">
-              <SectionTag>First one in?</SectionTag>
-              <h2>No calls yet. Make this match yours.</h2>
+              <SectionTag>Empty</SectionTag>
+              <h2>No challenges yet</h2>
             </div>
           )}
         </section>

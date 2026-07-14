@@ -54,7 +54,7 @@ export function WalletPanel({ latestSignature }: { latestSignature?: string }) {
   return (
     <aside className="nb-card accent-cyan match-pass" aria-label="Your account">
       <span className="tag">Your account</span>
-      <h2>{wallet.publicKey ? "You're ready to go." : "Connect when you want to play."}</h2>
+      <h2>{wallet.publicKey ? "Wallet connected" : "Wallet disconnected"}</h2>
       <div className="metric-row">
         <span>Wallet</span>
         <strong className="mono">{wallet.publicKey ? truncate(wallet.publicKey.toBase58()) : "Disconnected"}</strong>
@@ -74,10 +74,6 @@ export function WalletPanel({ latestSignature }: { latestSignature?: string }) {
         )}
       </div>
       <PendingIndexingRecovery />
-      <div className="help-box">
-        <strong>One place for your match night.</strong>
-        <p>Use the wallet menu in the header to connect, switch, or disconnect. Your picks stay here once you&apos;re in.</p>
-      </div>
     </aside>
   );
 }
@@ -668,8 +664,8 @@ export function FixtureRefreshPanel() {
     <div className="fixture-refresh">
       <div>
         <span className="tag">The match board</span>
-        <h3>Ready for the latest fixtures?</h3>
-        <p>Pull in the current match list before choosing your next call.</p>
+        <h3>Refresh fixtures</h3>
+        <p>Sync the current match list.</p>
       </div>
       <div className="fixture-refresh-actions">
         <button className="nb-button primary" type="button" onClick={refreshLive}>Check for matches</button>

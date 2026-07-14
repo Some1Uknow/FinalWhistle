@@ -23,7 +23,7 @@ export default async function MarketPage({ params }: { params: Promise<{ marketI
       <Link className="inline-back" href="/challenges">← Back to challenges</Link>
       <section className="section-head">
         <div>
-          <SectionTag>Friendly challenge</SectionTag>
+          <SectionTag>Challenge</SectionTag>
           <h1>{challengeTitle}</h1>
         </div>
         <StatusBadge status={publicMarket.status} />
@@ -32,7 +32,7 @@ export default async function MarketPage({ params }: { params: Promise<{ marketI
         <section className="form-grid">
           <div className="nb-card accent-yellow">
             <SectionTag>The call</SectionTag>
-            <h2>{publicMarket.template === "MATCH_WINNER" ? "Back a home win—or not." : "Call the goal total."}</h2>
+            <h2>{publicMarket.template === "MATCH_WINNER" ? "Match winner" : "Total goals"}</h2>
             <div className="metric-row">
               <span>Match</span>
               <Link href={`/fixtures/${publicMarket.fixtureId}`}>Open match</Link>
@@ -55,9 +55,9 @@ export default async function MarketPage({ params }: { params: Promise<{ marketI
             </div>
           </div>
           <div className="nb-card accent-cyan">
-            <SectionTag>After full time</SectionTag>
-            <h2>The match gets the last word.</h2>
-            <p>When the result is clear, this challenge updates with a result you can check in one place.</p>
+            <SectionTag>Verification</SectionTag>
+            <h2>Result record</h2>
+            <p>View the recorded outcome and transaction receipt.</p>
             <div className="receipt-actions">
               <Link className="nb-button" href={`/markets/${publicMarket.id}/proof`}>View match result</Link>
               <ExplorerLink signature={publicMarket.createTxSig} />

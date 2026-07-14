@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CircleDot } from "lucide-react";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import { AppWalletButton } from "@/components/app-wallet";
 import { Providers } from "./providers";
 import "@solana/wallet-adapter-react-ui/styles.css";
@@ -15,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body>
         <div className="app-shell">
           <Providers>
@@ -28,15 +30,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/matches">Matches</Link>
                 <Link href="/challenges">Challenges</Link>
                 <Link href="/portfolio">My picks</Link>
-                <Link href="/how-it-works">How it works</Link>
               </nav>
               <AppWalletButton />
             </header>
             {children}
             <footer className="site-footer">
-              <span className="footer-note">Made for the group chat. Play kindly.</span>
+              <span className="footer-note">Devnet beta · Test tokens have no cash value</span>
               <span className="footer-links">
-                <Link href="/eligibility">Eligibility</Link> · <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
+                <Link href="/how-it-works">How it works</Link> · <Link href="/eligibility">Eligibility</Link> · <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
               </span>
             </footer>
           </Providers>
