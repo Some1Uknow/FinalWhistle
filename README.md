@@ -6,14 +6,17 @@ You choose a supported match and prediction, such as “Team A wins” or “mor
 
 This is an early public beta. It runs on Solana devnet and uses test tokens only. Do not use real money, real tokens, or production wallets with this project.
 
+## Current deployment status
+
+The devnet program and database schema are deployed, but the immutable on-chain settlement configuration is deliberately not initialized. Until the TxLINE credentials and a provider-confirmed, on-chain-verifiable finality mapping are supplied, `/api/health` remains `503` and market writes stay disabled. This is a fail-closed release gate, not a fallback to unverified settlement.
+
 ## What is included
 
 - A web app for browsing matches, creating challenges, joining the other side, and viewing payouts.
 - Supported predictions for match winners and total goals over/under a line.
 - A small Solana program that holds the challenge funds and controls the market lifecycle.
 - Wallet-based signing for actions that change funds or market state.
-- TxLINE checks that verify the final match phase before settlement or cancellation.
-- A live score stream and cached match data.
+- TxLINE-backed fixture discovery and bounded, freshness-labelled caching.
 - Refunds for cancelled, expired, unmatched, or unresolved markets.
 - Replay protection so a request cannot accidentally be submitted twice.
 
@@ -53,7 +56,6 @@ Copy `.env.example` to `.env` before adding a TxLINE token or changing the Solan
 
 - `apps/web` contains the Next.js App Router application, frontend pages, API routes, and the supported server runtime.
 - `programs/final_whistle` contains the Anchor program deployed to Solana.
-- `backend` is retired Fastify code kept only as migration reference. Its start and dev commands intentionally fail closed; do not deploy it.
 - PostgreSQL stores the application’s cached fixtures, markets, positions, nonces, and idempotency records.
 
 The browser talks to same-origin Next.js API routes. This keeps wallet writes, authentication checks, rate limits, database updates, and Solana confirmation in one controlled request path.
@@ -73,11 +75,13 @@ The escrow is an SPL token account controlled by the market PDA. The program sto
 
 ### Match proofs and settlement
 
-The API prepares the accounts and arguments needed for TxLINE validation. The Anchor program then performs the TxLINE `validate_stat` CPI itself before accepting settlement or cancellation. This means the API cannot simply claim that a match finished or choose an unrelated proof source.
+The API prepares proof arguments and the Anchor program performs the configured TxLINE validation CPI before accepting a settlement or cancellation. The API cannot move escrow or simply assert a match result.
 
-An immutable on-chain `ProgramConfig` records the approved TxLINE program and finality stat key. Only the program upgrade authority can initialize that configuration. If the finality stat is missing or the proof is invalid, the API fails closed instead of falling back to unverified match data.
+An immutable on-chain `ProgramConfig` records the approved TxLINE program and finality stat key. Only the program upgrade authority can initialize that configuration. The public devnet program is intentionally unconfigured at present, so writes fail closed rather than falling back to unverified match data.
 
-Final phases can settle a market. Cancelled, postponed, abandoned, or coverage-suspended phases can trigger a refund cancellation. Open markets can also expire after their lock time, and locked markets have a settlement grace period for unresolved proofs.
+TxLINE's current Devnet SDK identifies a final soccer record by `action=game_finalised`, `statusId=100`, and `period=100`. FinalWhistle's current ABI additionally requires a provider-confirmed on-chain finality-stat mapping. That mapping has not been configured or guessed. Do not initialize `ProgramConfig` until TxLINE confirms a compatible proof path; otherwise upgrade the settlement ABI to the documented validation format and audit/redeploy it first.
+
+Open markets can expire after their lock time, and locked markets have a settlement grace period for unresolved proofs. After the relevant deadline, only the explicit expiry-refund path can close a market.
 
 ### Wallet security and replay protection
 
@@ -89,11 +93,11 @@ Mutating API requests require all of the following:
 - a confirmed Solana transaction containing the expected FinalWhistle instruction; and
 - matching on-chain market or position state before PostgreSQL is updated.
 
-The database writes are performed atomically where a request can be retried. Rate limits protect score streams and API buckets. Receipts expose proof hashes and useful metadata, not raw TxLINE proof payloads.
+The database writes are performed atomically where a request can be retried. Database-backed rate limits protect API buckets across serverless instances. Receipts expose proof hashes and useful metadata, not raw TxLINE proof payloads.
 
-### Data and live updates
+### Data freshness
 
-Fixture and market data is cached in PostgreSQL. The score stream is proxied through `/api/stream/scores` so the browser does not need direct access to the provider connection. Stale live fixtures cannot be used to create a market. Replay fixtures, when configured for a demo, are clearly labelled.
+Fixture and market data is cached in PostgreSQL. Public reads reuse the cache for a bounded interval instead of opening an upstream stream per browser. Stale fixtures are labelled and cannot be used to create a market. The public build contains no replay or invented fixture data.
 
 ### Deployment requirements
 
@@ -101,7 +105,7 @@ The public beta is devnet-only and requires:
 
 - `PUBLIC_ORIGIN` set to the deployed frontend origin;
 - a pooled PostgreSQL `DATABASE_URL`;
-- `TXLINE_API_TOKEN`, `TXLINE_PROGRAM_ID`, and `TXLINE_FINALITY_STAT_KEY` from secret storage;
+- `TXLINE_API_TOKEN` and a provider-confirmed `TXLINE_FINALITY_STAT_KEY`/proof mapping from secret storage and TxLINE;
 - an explicit devnet `ALLOWED_STAKE_MINTS` list;
 - a deployed Anchor program with its immutable `ProgramConfig` initialized; and
 - `REQUIRE_IDEMPOTENCY_KEYS=true`.
@@ -112,7 +116,7 @@ Run the database migration before deploying a schema change:
 pnpm --filter @final-whistle/web db:migrate
 ```
 
-The health endpoint reports `503` until TxLINE and the on-chain `ProgramConfig` are ready. Production requests do not run schema creation automatically.
+The health endpoint reports `503` until TxLINE, verified stake mints, PostgreSQL, and the on-chain `ProgramConfig` are ready. Production requests do not run schema creation automatically. This is intentional: do not invite users to create markets while health is not `200`.
 
 Never commit `.env` files, database files, keypairs, `node_modules`, `.next`, `target`, or other build output. Keep `FINAL_WHISTLE_UPGRADE_AUTHORITY_KEYPAIR` only in the operator’s local environment when initializing the program configuration.
 

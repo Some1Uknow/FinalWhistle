@@ -8,8 +8,8 @@
     "node": "24.x"
   },
   "scripts": {
-    "build": "pnpm --filter @final-whistle/web build && pnpm --filter @final-whistle/backend build",
-    "test": "pnpm --filter @final-whistle/web test && pnpm --filter @final-whistle/backend test",
+    "build": "pnpm --filter @final-whistle/web build",
+    "test": "pnpm --filter @final-whistle/web test && cargo test -p final_whistle",
     "dev": "pnpm --filter @final-whistle/web dev",
     "start": "pnpm --filter @final-whistle/web start",
     "dev:web": "pnpm --filter @final-whistle/web dev",
@@ -18,7 +18,6 @@
     "anchor:build": "anchor build"
   },
   "workspaces": [
-    "backend",
     "apps/web"
   ],
   "pnpm": {

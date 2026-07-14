@@ -14,6 +14,9 @@ type DatabasePool = DatabaseExecutor & {
   end?: () => Promise<void>;
 };
 
+const DEFAULT_READ_LIMIT = 50;
+const MAX_READ_LIMIT = 100;
+
 let pool: DatabasePool | undefined;
 let schemaPromise: Promise<void> | undefined;
 let memoryDatabase: { backup: () => { restore: () => void } } | undefined;
@@ -43,6 +46,7 @@ const schemaStatements = [
     template TEXT NOT NULL,
     predicate_json TEXT NOT NULL,
     lock_ts TEXT NOT NULL,
+    settlement_deadline_ts TEXT,
     status TEXT NOT NULL,
     yes_stake TEXT NOT NULL DEFAULT '0',
     no_stake TEXT NOT NULL DEFAULT '0',
@@ -80,9 +84,16 @@ const schemaStatements = [
     response_json TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
+  `CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+    key_hash TEXT PRIMARY KEY,
+    count INTEGER NOT NULL,
+    reset_at TIMESTAMPTZ NOT NULL
+  )`,
+  "ALTER TABLE markets ADD COLUMN IF NOT EXISTS settlement_deadline_ts TEXT",
   "CREATE INDEX IF NOT EXISTS markets_fixture_id_idx ON markets(fixture_id)",
   "CREATE INDEX IF NOT EXISTS positions_user_wallet_idx ON positions(user_wallet)",
-  "CREATE INDEX IF NOT EXISTS fixtures_updated_at_idx ON fixtures(updated_at)"
+  "CREATE INDEX IF NOT EXISTS fixtures_updated_at_idx ON fixtures(updated_at)",
+  "CREATE INDEX IF NOT EXISTS rate_limit_reset_at_idx ON rate_limit_buckets(reset_at)"
 ];
 
 /**
@@ -185,6 +196,42 @@ export async function databaseHealth() {
   await database.query("SELECT 1");
 }
 
+export async function consumeRateLimitBucket(input: {
+  keyHash: string;
+  max: number;
+  windowMs: number;
+}) {
+  const database = await executorFor();
+  const now = new Date();
+  const resetAt = new Date(now.getTime() + input.windowMs);
+  const existing = await database.query(
+    "SELECT key_hash FROM rate_limit_buckets WHERE key_hash = $1",
+    [input.keyHash]
+  );
+  if (!existing.rows[0]) {
+    await database.query("DELETE FROM rate_limit_buckets WHERE reset_at <= $1", [now]);
+    const capacity = await database.query("SELECT COUNT(*) AS count FROM rate_limit_buckets");
+    if (Number(capacity.rows[0]?.count ?? 0) >= config.rateLimitMaxBuckets) {
+      throw Object.assign(new Error("Request capacity reached; try again shortly"), { statusCode: 429 });
+    }
+  }
+  const result = await database.query(
+    `INSERT INTO rate_limit_buckets (key_hash, count, reset_at)
+     VALUES ($1, 1, $2)
+     ON CONFLICT(key_hash) DO UPDATE SET
+       count = CASE WHEN rate_limit_buckets.reset_at <= $3 THEN 1 ELSE rate_limit_buckets.count + 1 END,
+       reset_at = CASE WHEN rate_limit_buckets.reset_at <= $3
+         THEN $2
+         ELSE rate_limit_buckets.reset_at END
+     RETURNING count, reset_at`,
+    [input.keyHash, resetAt, now]
+  );
+  const count = Number(result.rows[0]?.count ?? input.max + 1);
+  if (count > input.max) {
+    throw Object.assign(new Error("Too many requests; try again shortly"), { statusCode: 429 });
+  }
+}
+
 async function executorFor(executor?: DatabaseExecutor) {
   if (executor) return executor;
   await ensureDatabaseSchema();
@@ -263,15 +310,22 @@ export type FixtureView = {
   updatedAt: string;
 };
 
-export async function listFixtureViews(source: FixtureSource, stale: boolean, executor?: DatabaseExecutor): Promise<FixtureView[]> {
+export async function listFixtureViews(
+  source: FixtureSource,
+  stale: boolean,
+  limit = DEFAULT_READ_LIMIT,
+  executor?: DatabaseExecutor
+): Promise<FixtureView[]> {
   const database = await executorFor(executor);
   const result = await database.query(
-    "SELECT id, name, starts_at, participant_1, participant_2, raw_json, updated_at FROM fixtures ORDER BY starts_at DESC NULLS LAST, created_at DESC"
+    `SELECT id, name, starts_at, participant_1, participant_2, raw_json, updated_at
+     FROM fixtures
+     ORDER BY starts_at DESC NULLS LAST, created_at DESC
+     LIMIT $1`,
+    [readLimit(limit)]
   );
   const views = result.rows.map((row) => mapFixtureView(row, source, stale));
-  return source === "replay"
-    ? views.filter((fixture) => fixture.source === "replay")
-    : views.filter((fixture) => fixture.source !== "replay");
+  return views;
 }
 
 export async function getFixtureView(
@@ -291,7 +345,7 @@ export async function getFixtureView(
 
 export async function newestFixtureUpdatedAt(executor?: DatabaseExecutor): Promise<number | undefined> {
   const database = await executorFor(executor);
-  const result = await database.query("SELECT MAX(updated_at) AS updated_at FROM fixtures WHERE raw_json NOT LIKE '%configured_replay%'");
+  const result = await database.query("SELECT MAX(updated_at) AS updated_at FROM fixtures");
   const value = result.rows[0]?.updated_at;
   const updatedAt = timestampMillis(value);
   return Number.isFinite(updatedAt) ? updatedAt : undefined;
@@ -367,6 +421,7 @@ export async function insertMarket(input: {
   template: string;
   predicate: Predicate;
   lockTs: string;
+  settlementDeadlineTs?: string;
   marketPda?: string;
   escrowTokenAccount?: string;
   tokenMint?: string;
@@ -376,8 +431,8 @@ export async function insertMarket(input: {
   await database.query(
     `INSERT INTO markets (
       id, fixture_id, creator, market_pda, escrow_token_account, token_mint,
-      create_tx_sig, template, predicate_json, lock_ts, status
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN')`,
+      create_tx_sig, template, predicate_json, lock_ts, settlement_deadline_ts, status
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'OPEN')`,
     [
       input.id,
       input.fixtureId,
@@ -388,7 +443,8 @@ export async function insertMarket(input: {
       input.createTxSig ?? null,
       input.template,
       JSON.stringify(input.predicate),
-      input.lockTs
+      input.lockTs,
+      input.settlementDeadlineTs ?? null
     ]
   );
   return (await getMarket(input.id, database))!;
@@ -406,15 +462,22 @@ export async function getMarketByPda(marketPda: string, executor?: DatabaseExecu
   return result.rows[0] ? mapMarket(result.rows[0]) : undefined;
 }
 
-export async function listFixtureMarkets(fixtureId: string, executor?: DatabaseExecutor): Promise<MarketRecord[]> {
+export async function listFixtureMarkets(
+  fixtureId: string,
+  limit = DEFAULT_READ_LIMIT,
+  executor?: DatabaseExecutor
+): Promise<MarketRecord[]> {
   const database = await executorFor(executor);
-  const result = await database.query("SELECT * FROM markets WHERE fixture_id = $1 ORDER BY created_at DESC", [fixtureId]);
+  const result = await database.query(
+    "SELECT * FROM markets WHERE fixture_id = $1 ORDER BY created_at DESC LIMIT $2",
+    [fixtureId, readLimit(limit)]
+  );
   return result.rows.map(mapMarket);
 }
 
-export async function listAllMarkets(executor?: DatabaseExecutor): Promise<MarketRecord[]> {
+export async function listAllMarkets(limit = DEFAULT_READ_LIMIT, executor?: DatabaseExecutor): Promise<MarketRecord[]> {
   const database = await executorFor(executor);
-  const result = await database.query("SELECT * FROM markets ORDER BY created_at DESC");
+  const result = await database.query("SELECT * FROM markets ORDER BY created_at DESC LIMIT $1", [readLimit(limit)]);
   return result.rows.map(mapMarket);
 }
 
@@ -448,6 +511,7 @@ export async function reconcileOnchainMarket(input: {
   template: MarketRecord["template"];
   predicate: Predicate;
   lockTs: string;
+  settlementDeadlineTs?: string;
   status: MarketStatus;
   yesStake: string;
   noStake: string;
@@ -462,9 +526,9 @@ export async function reconcileOnchainMarket(input: {
     await database.query(
       `INSERT INTO markets (
         id, fixture_id, creator, market_pda, escrow_token_account, token_mint,
-        template, predicate_json, lock_ts, status, yes_stake, no_stake,
+        template, predicate_json, lock_ts, settlement_deadline_ts, status, yes_stake, no_stake,
         winning_side, txline_seq, proof_hash
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
       [
         id,
         input.fixtureId,
@@ -475,6 +539,7 @@ export async function reconcileOnchainMarket(input: {
         input.template,
         JSON.stringify(input.predicate),
         input.lockTs,
+        input.settlementDeadlineTs ?? null,
         input.status,
         input.yesStake,
         input.noStake,
@@ -487,9 +552,9 @@ export async function reconcileOnchainMarket(input: {
     await database.query(
       `UPDATE markets SET
         fixture_id = $1, creator = $2, escrow_token_account = $3, token_mint = $4,
-        template = $5, predicate_json = $6, lock_ts = $7, status = $8, yes_stake = $9, no_stake = $10,
-        winning_side = $11, txline_seq = $12, proof_hash = $13, updated_at = CURRENT_TIMESTAMP
-       WHERE market_pda = $14`,
+        template = $5, predicate_json = $6, lock_ts = $7, settlement_deadline_ts = $8, status = $9, yes_stake = $10, no_stake = $11,
+        winning_side = $12, txline_seq = $13, proof_hash = $14, updated_at = CURRENT_TIMESTAMP
+       WHERE market_pda = $15`,
       [
         input.fixtureId,
         input.creator,
@@ -498,6 +563,7 @@ export async function reconcileOnchainMarket(input: {
         input.template,
         JSON.stringify(input.predicate),
         input.lockTs,
+        input.settlementDeadlineTs ?? null,
         input.status,
         input.yesStake,
         input.noStake,
@@ -564,7 +630,7 @@ export async function getPositionForWallet(
   return result.rows[0] ? mapPosition(result.rows[0]) : undefined;
 }
 
-export async function listWalletPositions(userWallet: string, executor?: DatabaseExecutor) {
+export async function listWalletPositions(userWallet: string, limit = DEFAULT_READ_LIMIT, executor?: DatabaseExecutor) {
   const database = await executorFor(executor);
   const result = await database.query(
     `SELECT
@@ -580,8 +646,9 @@ export async function listWalletPositions(userWallet: string, executor?: Databas
     FROM positions
     JOIN markets ON markets.id = positions.market_id
     WHERE positions.user_wallet = $1
-    ORDER BY positions.created_at DESC`,
-    [userWallet]
+    ORDER BY positions.created_at DESC
+    LIMIT $2`,
+    [userWallet, readLimit(limit)]
   );
   return result.rows.map((record) => ({
     position: mapPosition(record),
@@ -696,6 +763,7 @@ function mapMarket(row: Row): MarketRecord {
     template: row.template as MarketRecord["template"],
     predicate: JSON.parse(String(row.predicate_json)) as Predicate,
     lockTs: String(row.lock_ts),
+    settlementDeadlineTs: optionalString(row.settlement_deadline_ts),
     status: row.status as MarketRecord["status"],
     yesStake: String(row.yes_stake),
     noStake: String(row.no_stake),
@@ -709,16 +777,14 @@ function mapMarket(row: Row): MarketRecord {
 }
 
 function mapFixtureView(row: Row, source: FixtureSource, stale: boolean): FixtureView {
-  const raw = parseRecord(row.raw_json);
-  const replay = raw.source === "configured_replay";
   return {
     id: String(row.id),
     name: optionalString(row.name),
     startsAt: optionalString(row.starts_at),
     participant1: optionalString(row.participant_1),
     participant2: optionalString(row.participant_2),
-    source: replay ? "replay" : source,
-    stale: replay || stale || !isFreshTimestamp(row.updated_at),
+    source,
+    stale: stale || !isFreshTimestamp(row.updated_at),
     updatedAt: timestampString(row.updated_at)
   };
 }
@@ -764,6 +830,11 @@ function timestampString(value: unknown) {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readLimit(value: number) {
+  if (!Number.isSafeInteger(value)) return DEFAULT_READ_LIMIT;
+  return Math.min(Math.max(value, 1), MAX_READ_LIMIT);
 }
 
 function isUniqueViolation(error: unknown) {

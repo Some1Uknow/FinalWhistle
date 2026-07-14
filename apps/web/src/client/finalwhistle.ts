@@ -32,9 +32,10 @@ export type PublicConfig = {
   programId: string;
   txlineProgramId: string;
   allowedStakeMints: string[];
+  stakeTokens: Array<{ mint: string; symbol: string; decimals: number }>;
+  deploymentConfigured: boolean;
   finalityConfigured: boolean;
   programConfigReady: boolean;
-  replayEnabled: boolean;
   devnetTokenFaucetUrl: string;
 };
 
@@ -222,7 +223,7 @@ export function buildClaimIx(input: {
   };
 }
 
-export function buildProofIx(input: { market: MarketRecord; payload: TxlineProofPayload; programId: PublicKey }) {
+export function buildProofIx(input: { market: Pick<MarketRecord, "marketPda">; payload: TxlineProofPayload; programId: PublicKey }) {
   const market = new PublicKey(input.market.marketPda!);
   const txlineProgram = new PublicKey(input.payload.txlineProgramId);
   const dailyScores = new PublicKey(input.payload.dailyScoresMerkleRoots);
@@ -245,7 +246,7 @@ export function buildProofIx(input: { market: MarketRecord; payload: TxlineProof
 
 function settlementArgs(args: Record<string, unknown>) {
   return concat([
-    i64(BigInt(Number(args.fixtureId))),
+    i64(BigInt(String(args.fixtureId))),
     u64(BigInt(String(args.seq))),
     u32(Number(args.statKey1)),
     option(args.statKey2 === undefined ? undefined : u32(Number(args.statKey2))),
@@ -258,7 +259,7 @@ function settlementArgs(args: Record<string, unknown>) {
 
 function cancellationArgs(args: Record<string, unknown>) {
   return concat([
-    i64(BigInt(Number(args.fixtureId))),
+    i64(BigInt(String(args.fixtureId))),
     u64(BigInt(String(args.seq))),
     txlineProof(args.cancellationProof as Record<string, unknown>),
     u32(Number(args.cancellationStatKey)),

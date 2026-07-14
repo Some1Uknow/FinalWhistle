@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-process.env.NODE_ENV = "production";
+Object.assign(process.env, { NODE_ENV: "production" });
 process.env.FINAL_WHISTLE_DATABASE_MODE = "memory";
 process.env.PUBLIC_ORIGIN = "https://beta.example.test";
 process.env.SOLANA_CLUSTER = "devnet";
@@ -27,4 +27,11 @@ test("pooled PostgreSQL URLs use explicit SSL hostname verification", async () =
   );
 
   assert.equal(normalized.searchParams.get("sslmode"), "verify-full");
+});
+
+test("the public stake-token allowlist cannot advertise an unsupported mint", async () => {
+  const { isSupportedDevnetStakeMint } = await import("../src/server/config");
+
+  assert.equal(isSupportedDevnetStakeMint("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"), true);
+  assert.equal(isSupportedDevnetStakeMint("11111111111111111111111111111111"), false);
 });

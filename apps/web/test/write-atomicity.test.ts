@@ -36,3 +36,10 @@ test("a failed indexed write rolls back its consumed nonce and idempotency recor
     requestHash: "a".repeat(64)
   })).found, false);
 });
+
+test("rate limits are enforced in shared database state", async () => {
+  const { consumeRateLimitBucket } = await import("../src/server/db");
+  const input = { keyHash: "rate-test", max: 1, windowMs: 60_000 };
+  await consumeRateLimitBucket(input);
+  await assert.rejects(() => consumeRateLimitBucket(input), /Too many requests/);
+});

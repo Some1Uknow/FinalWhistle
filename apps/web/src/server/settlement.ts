@@ -12,7 +12,7 @@ export type TxlineSettlementProofPayload = {
   dailyScoresMerkleRoots: string;
   instruction: "settle_market";
   args: {
-    fixtureId: number;
+    fixtureId: string;
     seq: string;
     statKey1: number;
     statKey2?: number;
@@ -29,7 +29,7 @@ export type TxlineCancellationProofPayload = {
   dailyScoresMerkleRoots: string;
   instruction: "cancel_market";
   args: {
-    fixtureId: number;
+    fixtureId: string;
     seq: string;
     cancellationProof: TxlineStatValidationProof;
     cancellationStatKey: number;
@@ -101,6 +101,7 @@ export function buildTxlineSettlementProofPayload(input: {
     statKey1: config.txlineFinalityStatKey,
     operator: "NONE"
   });
+  assertMatchingTxlineSnapshot(outcomeProof, finalityProof);
   const outcomeDailyScores = deriveDailyScoresPda(extractMinTimestamp(outcomeProof));
   const finalityDailyScores = deriveDailyScoresPda(extractMinTimestamp(finalityProof));
   if (outcomeDailyScores !== finalityDailyScores) {
@@ -117,7 +118,7 @@ export function buildTxlineSettlementProofPayload(input: {
     dailyScoresMerkleRoots: outcomeDailyScores,
     instruction: "settle_market",
     args: {
-      fixtureId: Number(input.market.fixtureId),
+      fixtureId: input.market.fixtureId,
       seq: input.seq,
       statKey1: input.market.predicate.statKey1,
       statKey2: input.market.predicate.statKey2,
@@ -152,7 +153,7 @@ export function buildTxlineCancellationProofPayload(input: {
     dailyScoresMerkleRoots: deriveDailyScoresPda(extractMinTimestamp(cancellationProof)),
     instruction: "cancel_market",
     args: {
-      fixtureId: Number(input.market.fixtureId),
+      fixtureId: input.market.fixtureId,
       seq: input.seq,
       cancellationProof,
       cancellationStatKey: config.txlineFinalityStatKey,
@@ -225,6 +226,30 @@ export function toTxlineStatValidationProof(
         ? { subtract: {} }
         : null
   };
+}
+
+/**
+ * A valid finality proof and a valid score proof are not necessarily from the
+ * same score update. Keep the browser from constructing a transaction the
+ * program will reject, and make the inconsistency explicit before signing.
+ */
+export function assertMatchingTxlineSnapshot(
+  outcomeProof: TxlineStatValidationProof,
+  finalityProof: TxlineStatValidationProof
+) {
+  const outcome = outcomeProof.fixtureSummary;
+  const finality = finalityProof.fixtureSummary;
+  const sameRoot = outcome.eventsSubTreeRoot.length === finality.eventsSubTreeRoot.length &&
+    outcome.eventsSubTreeRoot.every((byte, index) => byte === finality.eventsSubTreeRoot[index]);
+  const sameSnapshot =
+    outcome.fixtureId === finality.fixtureId &&
+    outcome.updateStats.updateCount === finality.updateStats.updateCount &&
+    outcome.updateStats.minTimestamp === finality.updateStats.minTimestamp &&
+    outcome.updateStats.maxTimestamp === finality.updateStats.maxTimestamp &&
+    sameRoot;
+  if (!sameSnapshot) {
+    throw new Error("TxLINE outcome and finality proofs must use the same fixture snapshot");
+  }
 }
 
 export function deriveDailyScoresPda(minTimestampMs: number) {

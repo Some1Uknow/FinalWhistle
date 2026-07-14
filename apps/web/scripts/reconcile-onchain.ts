@@ -44,6 +44,7 @@ for (const account of accounts) {
         comparison: state.predicate.comparison
       },
       lockTs: toIsoTimestamp(state.lockTs),
+      settlementDeadlineTs: toIsoTimestamp(state.settlementDeadlineTs),
       status: state.status,
       yesStake: state.yesStake,
       noStake: state.noStake,

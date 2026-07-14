@@ -8,7 +8,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use crate::program::FinalWhistle;
 use std::str::FromStr;
 
-declare_id!("DaW6BCZ4AKUNwyEaoqik6xbrx9JcuqRbfhwzDstDEJWF");
+declare_id!("Hf4KSaGy7EHEaT9jMCo9nKx2uQRz6BEsYS3DrprkDaPw");
 
 const MARKET_SEED: &[u8] = b"market";
 const ESCROW_SEED: &[u8] = b"escrow";
@@ -16,9 +16,9 @@ const POSITION_SEED: &[u8] = b"position";
 const CONFIG_SEED: &[u8] = b"config";
 const MAX_FIXTURE_ID_LEN: usize = 64;
 const TXLINE_DEVNET_PROGRAM_ID: &str = "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J";
-const TXLINE_MAINNET_PROGRAM_ID: &str = "9ExbZjAapQww1vfcisDmrngPinHTEfpjYRWMunJgcKaA";
 const TXLINE_VALIDATE_STAT_DISCRIMINATOR: [u8; 8] = [107, 197, 232, 90, 191, 136, 105, 185];
 const SETTLEMENT_GRACE_PERIOD_SECONDS: i64 = 14 * 24 * 60 * 60;
+const MAX_MARKET_OPEN_SECONDS: i64 = 24 * 60 * 60;
 const DEVNET_USDC_MINT: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const TXLINE_DEVNET_USDT_MINT: &str = "ELWTKspHKCnCfCiCiqYw1EDH77k8VCP74dK9qytG2Ujh";
 
@@ -64,7 +64,13 @@ pub mod final_whistle {
             fixture_id.as_bytes().len() <= MAX_FIXTURE_ID_LEN,
             FinalWhistleError::FixtureIdTooLong
         );
-        require!(lock_ts > Clock::get()?.unix_timestamp, FinalWhistleError::InvalidLockTime);
+        let now = Clock::get()?.unix_timestamp;
+        require!(lock_ts > now, FinalWhistleError::InvalidLockTime);
+        require!(
+            lock_ts <= now.checked_add(MAX_MARKET_OPEN_SECONDS).ok_or(FinalWhistleError::MathOverflow)?,
+            FinalWhistleError::InvalidLockTime
+        );
+        require_canonical_fixture_id(&fixture_id)?;
         require!(predicate.is_valid_for_template(template), FinalWhistleError::InvalidPredicate);
         require_allowed_stake_mint(ctx.accounts.token_mint.key())?;
 
@@ -212,6 +218,12 @@ pub mod final_whistle {
         let market = &mut ctx.accounts.market;
         let program_config = &ctx.accounts.config;
         require!(market.status == MarketStatus::Locked, FinalWhistleError::MarketNotLocked);
+        require_market_action_window(
+            market.status,
+            Clock::get()?.unix_timestamp,
+            market.lock_ts,
+            market.settlement_deadline_ts,
+        )?;
         require_allowed_txline_program(program_config.txline_program)?;
         require_keys_eq!(
             ctx.accounts.txline_program.key(),
@@ -236,6 +248,7 @@ pub mod final_whistle {
         );
         require_txline_proof_fixture(&args.outcome_proof, args.fixture_id)?;
         require_txline_proof_fixture(&args.finality_proof, args.fixture_id)?;
+        require_matching_txline_snapshot(&args.outcome_proof, &args.finality_proof)?;
         require_txline_proof_stat(&args.outcome_proof, args.stat_key_1, args.stat_key_2)?;
         require_txline_proof_stat(&args.finality_proof, args.finality_stat_key, None)?;
         require!(is_final_phase_id(args.final_phase_id), FinalWhistleError::MatchNotFinal);
@@ -309,10 +322,12 @@ pub mod final_whistle {
             args.cancellation_stat_key == program_config.finality_stat_key,
             FinalWhistleError::FinalityStatKeyMismatch
         );
-        require!(
-            market.status == MarketStatus::Open || market.status == MarketStatus::Locked,
-            FinalWhistleError::InvalidMarketStatus
-        );
+        require_market_action_window(
+            market.status,
+            Clock::get()?.unix_timestamp,
+            market.lock_ts,
+            market.settlement_deadline_ts,
+        )?;
         require!(args.fixture_id.to_string() == market.fixture_id, FinalWhistleError::FixtureMismatch);
         require!(args.seq > market.settlement_txline_seq, FinalWhistleError::InvalidSequence);
         require!(
@@ -488,7 +503,7 @@ pub struct UpdateMarket<'info> {
 
 #[derive(Accounts)]
 pub struct SettleMarket<'info> {
-    /// CHECK: Validated against the TxLINE devnet/mainnet allowlist before CPI.
+    /// CHECK: Validated against the TxLINE devnet allowlist before CPI.
     pub txline_program: AccountInfo<'info>,
     /// CHECK: TxLINE validates this PDA and owner inside validate_stat.
     pub daily_scores_merkle_roots: AccountInfo<'info>,
@@ -721,6 +736,8 @@ impl Predicate {
                 self.stat_key_1 == 1
                     && self.stat_key_2 == Some(2)
                     && self.operator == StatOperator::Add
+                    && (500..=8500).contains(&self.threshold_milli)
+                    && self.threshold_milli % 1000 == 500
                     && self.comparison == Comparison::GreaterThan
             }
         }
@@ -821,10 +838,63 @@ fn is_cancel_phase_id(phase_id: i32) -> bool {
     matches!(phase_id, 14 | 15 | 16 | 17 | 18 | 19)
 }
 
+/// Once an expiry refund is available, proof-based state changes must stop so
+/// a delayed settlement cannot race `cancel_expired_market`. Open markets
+/// expire at lock time; balanced markets expire at their settlement deadline.
+fn require_market_action_window(
+    status: MarketStatus,
+    now: i64,
+    lock_ts: i64,
+    settlement_deadline_ts: i64,
+) -> Result<()> {
+    let expiry = match status {
+        MarketStatus::Open => lock_ts,
+        MarketStatus::Locked => settlement_deadline_ts,
+        _ => return err!(FinalWhistleError::InvalidMarketStatus),
+    };
+    require!(now < expiry, FinalWhistleError::MarketActionWindowExpired);
+    Ok(())
+}
+
+/// Markets store fixture IDs as PDA seed bytes but settlement receives the
+/// TxLINE ID as an `i64`. Requiring the canonical decimal representation keeps
+/// those two forms bijective: IDs such as `001`, `+1`, and `-0` would otherwise
+/// create a market that no valid settlement payload could reference.
+fn require_canonical_fixture_id(fixture_id: &str) -> Result<()> {
+    let parsed = fixture_id
+        .parse::<i64>()
+        .map_err(|_| error!(FinalWhistleError::InvalidFixtureId))?;
+    require!(
+        parsed >= 0 && parsed.to_string() == fixture_id,
+        FinalWhistleError::InvalidFixtureId
+    );
+    Ok(())
+}
+
 fn require_txline_proof_fixture(proof: &TxlineStatValidationProof, fixture_id: i64) -> Result<()> {
     require!(
         proof.fixture_summary.fixture_id == fixture_id,
         FinalWhistleError::FixtureMismatch
+    );
+    Ok(())
+}
+
+/// A finality proof can be valid while an older score proof is also valid. A
+/// settlement must use both values from the same TxLINE fixture snapshot, or a
+/// caller could combine a pre-final score with a later finality record.
+fn require_matching_txline_snapshot(
+    outcome_proof: &TxlineStatValidationProof,
+    finality_proof: &TxlineStatValidationProof,
+) -> Result<()> {
+    let outcome = &outcome_proof.fixture_summary;
+    let finality = &finality_proof.fixture_summary;
+    require!(
+        outcome.fixture_id == finality.fixture_id
+            && outcome.update_stats.update_count == finality.update_stats.update_count
+            && outcome.update_stats.min_timestamp == finality.update_stats.min_timestamp
+            && outcome.update_stats.max_timestamp == finality.update_stats.max_timestamp
+            && outcome.events_sub_tree_root == finality.events_sub_tree_root,
+        FinalWhistleError::TxlineProofSnapshotMismatch
     );
     Ok(())
 }
@@ -886,11 +956,7 @@ fn hash_cancellation_proof(proof: &TxlineStatValidationProof) -> Result<[u8; 32]
 
 fn require_allowed_txline_program(program_id: Pubkey) -> Result<()> {
     let devnet = Pubkey::from_str(TXLINE_DEVNET_PROGRAM_ID).map_err(|_| FinalWhistleError::InvalidTxlineProgram)?;
-    let mainnet = Pubkey::from_str(TXLINE_MAINNET_PROGRAM_ID).map_err(|_| FinalWhistleError::InvalidTxlineProgram)?;
-    require!(
-        program_id == devnet || program_id == mainnet,
-        FinalWhistleError::InvalidTxlineProgram
-    );
+    require!(program_id == devnet, FinalWhistleError::InvalidTxlineProgram);
     Ok(())
 }
 
@@ -957,6 +1023,8 @@ fn validate_txline_stat<'info>(
 pub enum FinalWhistleError {
     #[msg("Fixture id is too long")]
     FixtureIdTooLong,
+    #[msg("Fixture id must be a canonical non-negative TxLINE numeric id")]
+    InvalidFixtureId,
     #[msg("Lock time must be in the future")]
     InvalidLockTime,
     #[msg("Predicate is not valid for the selected market template")]
@@ -1029,6 +1097,10 @@ pub enum FinalWhistleError {
     InvalidFinalityStatKey,
     #[msg("The TxLINE finality stat key does not match program configuration")]
     FinalityStatKeyMismatch,
+    #[msg("TxLINE outcome and finality proofs must use the same fixture snapshot")]
+    TxlineProofSnapshotMismatch,
+    #[msg("Market is past its settlement or proof-cancellation window")]
+    MarketActionWindowExpired,
 }
 
 #[cfg(test)]
@@ -1062,9 +1134,17 @@ mod tests {
         assert!(total_goals.is_valid_for_template(MarketTemplate::TotalGoalsOverUnder));
         let inverse_total = Predicate {
             comparison: Comparison::LessThan,
-            ..total_goals
+            ..total_goals.clone()
         };
         assert!(!inverse_total.is_valid_for_template(MarketTemplate::TotalGoalsOverUnder));
+
+        for invalid_line in [0, 499, 1000, 9000] {
+            assert!(!Predicate {
+                threshold_milli: invalid_line,
+                ..total_goals.clone()
+            }
+            .is_valid_for_template(MarketTemplate::TotalGoalsOverUnder));
+        }
     }
 
     #[test]
@@ -1075,5 +1155,73 @@ mod tests {
             Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap()
         )
         .is_err());
+    }
+
+    #[test]
+    fn fixture_ids_must_have_a_canonical_decimal_encoding() {
+        for fixture_id in ["0", "1", "17952170", "9223372036854775807"] {
+            assert!(require_canonical_fixture_id(fixture_id).is_ok(), "{fixture_id}");
+        }
+
+        for fixture_id in ["", "001", "+1", "-0", "-1", "1.0", "9223372036854775808"] {
+            assert!(require_canonical_fixture_id(fixture_id).is_err(), "{fixture_id}");
+        }
+    }
+
+    #[test]
+    fn settlement_proofs_must_share_the_fixture_snapshot() {
+        let mut outcome = TxlineStatValidationProof {
+            ts: 1,
+            fixture_summary: TxlineScoresBatchSummary {
+                fixture_id: 17_952_170,
+                update_stats: TxlineScoresUpdateStats {
+                    update_count: 3,
+                    min_timestamp: 1_700_000_000_000,
+                    max_timestamp: 1_700_000_050_000,
+                },
+                events_sub_tree_root: [7; 32],
+            },
+            fixture_proof: vec![],
+            main_tree_proof: vec![],
+            predicate: TxlineTraderPredicate {
+                threshold: 0,
+                comparison: TxlineComparison::GreaterThan,
+            },
+            stat_a: TxlineStatTerm {
+                stat_to_prove: TxlineScoreStat {
+                    key: 1,
+                    value: 2,
+                    period: 0,
+                },
+                event_stat_root: [0; 32],
+                stat_proof: vec![],
+            },
+            stat_b: None,
+            op: None,
+        };
+        let mut finality = outcome.clone();
+
+        assert!(require_matching_txline_snapshot(&outcome, &finality).is_ok());
+
+        finality.fixture_summary.update_stats.update_count += 1;
+        assert!(require_matching_txline_snapshot(&outcome, &finality).is_err());
+
+        finality = outcome.clone();
+        finality.fixture_summary.events_sub_tree_root = [8; 32];
+        assert!(require_matching_txline_snapshot(&outcome, &finality).is_err());
+
+        outcome.fixture_summary.fixture_id += 1;
+        assert!(require_matching_txline_snapshot(&outcome, &finality).is_err());
+    }
+
+    #[test]
+    fn proof_actions_stop_when_the_expiry_refund_window_opens() {
+        assert!(require_market_action_window(MarketStatus::Open, 99, 100, 200).is_ok());
+        assert!(require_market_action_window(MarketStatus::Open, 100, 100, 200).is_err());
+
+        assert!(require_market_action_window(MarketStatus::Locked, 199, 100, 200).is_ok());
+        assert!(require_market_action_window(MarketStatus::Locked, 200, 100, 200).is_err());
+
+        assert!(require_market_action_window(MarketStatus::Settled, 0, 100, 200).is_err());
     }
 }

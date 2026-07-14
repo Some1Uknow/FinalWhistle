@@ -1,15 +1,24 @@
 import "dotenv/config";
 import { PublicKey } from "@solana/web3.js";
 
-export type TxlineEnvironment = "mainnet" | "devnet";
+export type TxlineEnvironment = "devnet";
 
-const txlineEnv = (process.env.TXLINE_ENV ?? "devnet") as TxlineEnvironment;
-const solanaCluster = process.env.SOLANA_CLUSTER ?? "devnet";
-const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
-const defaultAllowedStakeMints = [
+// These are the only legacy SPL mints accepted by the deployed program. Keep
+// the server-side allowlist a subset of this list so the UI never advertises a
+// token that the escrow instruction will reject on-chain.
+export const SUPPORTED_DEVNET_STAKE_MINTS = [
   "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
   "ELWTKspHKCnCfCiCiqYw1EDH77k8VCP74dK9qytG2Ujh"
-];
+] as const;
+
+export function isSupportedDevnetStakeMint(mint: string) {
+  return (SUPPORTED_DEVNET_STAKE_MINTS as readonly string[]).includes(mint);
+}
+
+const txlineEnv = process.env.TXLINE_ENV ?? "devnet";
+const solanaCluster = process.env.SOLANA_CLUSTER ?? "devnet";
+const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
+const defaultAllowedStakeMints = [...SUPPORTED_DEVNET_STAKE_MINTS];
 
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -19,32 +28,26 @@ export const config = {
   txlineEnv,
   txlineGuestBaseUrl:
     process.env.TXLINE_GUEST_BASE_URL ??
-    (txlineEnv === "mainnet" ? "https://txline.txodds.com" : "https://txline-dev.txodds.com"),
+    "https://txline-dev.txodds.com",
   txlineApiBaseUrl:
     process.env.TXLINE_API_BASE_URL ??
-    (txlineEnv === "mainnet" ? "https://txline.txodds.com/api" : "https://txline-dev.txodds.com/api"),
+    "https://txline-dev.txodds.com/api",
   txlineApiToken: process.env.TXLINE_API_TOKEN ?? "",
   solanaCluster,
   solanaRpcUrl:
     process.env.SOLANA_RPC_URL ??
-    (solanaCluster === "mainnet-beta"
-      ? "https://api.mainnet-beta.solana.com"
-      : "https://api.devnet.solana.com"),
-  programId: process.env.FINAL_WHISTLE_PROGRAM_ID ?? "DaW6BCZ4AKUNwyEaoqik6xbrx9JcuqRbfhwzDstDEJWF",
+    "https://api.devnet.solana.com",
+  programId: process.env.FINAL_WHISTLE_PROGRAM_ID ?? "Hf4KSaGy7EHEaT9jMCo9nKx2uQRz6BEsYS3DrprkDaPw",
   txlineProgramId:
     process.env.TXLINE_PROGRAM_ID ??
-    (txlineEnv === "mainnet"
-      ? "9ExbZjAapQww1vfcisDmrngPinHTEfpjYRWMunJgcKaA"
-      : "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J"),
+    "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J",
   txlineFinalityStatKey: process.env.TXLINE_FINALITY_STAT_KEY ? Number(process.env.TXLINE_FINALITY_STAT_KEY) : undefined,
   allowedStakeMints: parseCsv(process.env.ALLOWED_STAKE_MINTS) ?? defaultAllowedStakeMints,
-  betaReplayFixtureIds: parseCsv(process.env.BETA_REPLAY_FIXTURE_IDS) ?? [],
   devnetTokenFaucetUrl: process.env.DEVNET_TOKEN_FAUCET_URL ?? "",
   requireIdempotencyKeys: process.env.REQUIRE_IDEMPOTENCY_KEYS !== "false",
   fixtureCacheMaxAgeMs: Number(process.env.FIXTURE_CACHE_MAX_AGE_MS ?? 120_000),
-  streamMaxClients: Number(process.env.STREAM_MAX_CLIENTS ?? 25),
-  streamMaxFixtureClients: Number(process.env.STREAM_MAX_FIXTURE_CLIENTS ?? 5),
-  streamMaxIpClients: Number(process.env.STREAM_MAX_IP_CLIENTS ?? 3),
+  fixtureRefreshMinIntervalMs: Number(process.env.FIXTURE_REFRESH_MIN_INTERVAL_MS ?? 30_000),
+  upstreamTimeoutMs: Number(process.env.UPSTREAM_TIMEOUT_MS ?? 8_000),
   rateLimitMaxBuckets: Number(process.env.RATE_LIMIT_MAX_BUCKETS ?? 10_000),
   trustProxy: process.env.TRUST_PROXY === "true"
 };
@@ -55,7 +58,7 @@ export function isProductionRuntime() {
 
 export function validateConfig() {
   const errors: string[] = [];
-  if (!["mainnet", "devnet"].includes(config.txlineEnv)) errors.push("TXLINE_ENV must be mainnet or devnet");
+  if (config.txlineEnv !== "devnet") errors.push("FinalWhistle is devnet-only; set TXLINE_ENV=devnet");
   if (!Number.isFinite(config.port) || config.port <= 0) errors.push("PORT must be a positive number");
   if (!Number.isInteger(config.txlineFinalityStatKey ?? 0)) {
     errors.push("TXLINE_FINALITY_STAT_KEY must be an integer when provided");
@@ -82,16 +85,17 @@ export function validateConfig() {
       new PublicKey(mint);
     } catch {
       errors.push(`Invalid stake mint: ${mint}`);
+      continue;
+    }
+    if (!isSupportedDevnetStakeMint(mint)) {
+      errors.push("ALLOWED_STAKE_MINTS must only contain devnet mints supported by the deployed program");
     }
   }
-  if (!Number.isInteger(config.streamMaxClients) || config.streamMaxClients <= 0) {
-    errors.push("STREAM_MAX_CLIENTS must be a positive integer");
+  if (!Number.isInteger(config.fixtureRefreshMinIntervalMs) || config.fixtureRefreshMinIntervalMs < 5_000) {
+    errors.push("FIXTURE_REFRESH_MIN_INTERVAL_MS must be an integer of at least 5000");
   }
-  if (!Number.isInteger(config.streamMaxFixtureClients) || config.streamMaxFixtureClients <= 0) {
-    errors.push("STREAM_MAX_FIXTURE_CLIENTS must be a positive integer");
-  }
-  if (!Number.isInteger(config.streamMaxIpClients) || config.streamMaxIpClients <= 0) {
-    errors.push("STREAM_MAX_IP_CLIENTS must be a positive integer");
+  if (!Number.isInteger(config.upstreamTimeoutMs) || config.upstreamTimeoutMs < 1_000) {
+    errors.push("UPSTREAM_TIMEOUT_MS must be an integer of at least 1000");
   }
   if (!Number.isInteger(config.rateLimitMaxBuckets) || config.rateLimitMaxBuckets < 100) {
     errors.push("RATE_LIMIT_MAX_BUCKETS must be an integer of at least 100");
@@ -106,8 +110,17 @@ export function validateConfig() {
     }
   }
 
-  if (isProductionRuntime() && config.solanaCluster !== "devnet") {
-    errors.push("Public beta deployment is devnet-only; set SOLANA_CLUSTER=devnet");
+  if (config.solanaCluster !== "devnet") errors.push("FinalWhistle is devnet-only; set SOLANA_CLUSTER=devnet");
+
+  if (config.devnetTokenFaucetUrl) {
+    try {
+      const faucetUrl = new URL(config.devnetTokenFaucetUrl);
+      if (isProductionRuntime() && faucetUrl.protocol !== "https:") {
+        errors.push("DEVNET_TOKEN_FAUCET_URL must use HTTPS in production");
+      }
+    } catch {
+      errors.push("DEVNET_TOKEN_FAUCET_URL must be an absolute URL when provided");
+    }
   }
 
   if (isProductionRuntime()) {
@@ -132,13 +145,6 @@ export function validateConfig() {
     } catch {
       errors.push("DATABASE_URL must be a valid PostgreSQL connection URL");
     }
-  }
-
-  const clusterTxlineMismatch =
-    (config.solanaCluster === "mainnet-beta" && config.txlineEnv !== "mainnet") ||
-    (config.solanaCluster !== "mainnet-beta" && config.txlineEnv !== "devnet");
-  if (clusterTxlineMismatch) {
-    errors.push("SOLANA_CLUSTER and TXLINE_ENV must target the same network class");
   }
 
   if (errors.length > 0) {

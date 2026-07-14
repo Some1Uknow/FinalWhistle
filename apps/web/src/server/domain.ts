@@ -1,5 +1,5 @@
-export const FINAL_PHASES = new Set(["F", "FET", "FPE"]);
-export const CANCELLATION_PHASES = new Set(["I", "A", "C", "TXCC", "TXCS", "P"]);
+export const FINAL_PHASES = new Set(["F", "FET", "FPE", "5", "10", "13"]);
+export const CANCELLATION_PHASES = new Set(["I", "A", "C", "TXCC", "TXCS", "P", "14", "15", "16", "17", "18", "19"]);
 
 export const SoccerStatKey = {
   participant1Goals: 1,
@@ -17,7 +17,7 @@ export type MarketStatus = "OPEN" | "LOCKED" | "SETTLED" | "CANCELLED";
 export type Side = "YES" | "NO";
 export type StatOperator = "NONE" | "ADD" | "SUBTRACT";
 export type Comparison = "GREATER_THAN" | "LESS_THAN" | "EQUAL";
-export type FixtureSource = "txline" | "cache" | "replay";
+export type FixtureSource = "txline" | "cache";
 
 export type Predicate = {
   statKey1: number;
@@ -40,6 +40,7 @@ export type MarketRecord = {
   template: MarketTemplate;
   predicate: Predicate;
   lockTs: string;
+  settlementDeadlineTs?: string;
   status: MarketStatus;
   yesStake: string;
   noStake: string;
@@ -50,6 +51,14 @@ export type MarketRecord = {
   createdAt: string;
   updatedAt: string;
 };
+
+/** A market safe to serialize to an unauthenticated browser. */
+export type PublicMarket = Omit<MarketRecord, "rawProof">;
+
+export function toPublicMarket(market: MarketRecord): PublicMarket {
+  const { rawProof: _privateProof, ...publicMarket } = market;
+  return publicMarket;
+}
 
 export function defaultPredicateForTemplate(template: MarketTemplate, thresholdMilli?: number): Predicate {
   if (template === "MATCH_WINNER") {
@@ -73,16 +82,25 @@ export function defaultPredicateForTemplate(template: MarketTemplate, thresholdM
 
 export function normalizeScoreEvent(input: unknown): Record<string, unknown> {
   const event = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
-  const fixtureId = firstString(event, ["fixtureId", "fixture_id", "id", "matchId"]);
+  const fixtureId = firstString(event, ["fixtureId", "fixture_id", "FixtureId", "id", "matchId"]);
   const seq = firstNumber(event, ["seq", "sequence", "txlineSeq"]);
   const phase = firstString(event, ["phase", "matchPhase", "status"]);
+  const action = firstString(event, ["action"]);
+  const statusId = firstNumber(event, ["statusId", "status_id"]);
+  const period = firstNumber(event, ["period"]);
+  const gameState = firstString(event, ["gameState", "game_state", "GameState"]);
+  const finalOutcome = action === "game_finalised" && statusId === 100 && period === 100;
+  const cancelledOutcome = gameState === "6" || ["cancelled", "canceled", "abandoned", "postponed"].includes((gameState ?? "").toLowerCase());
 
   return {
     fixtureId,
     seq,
     phase,
-    isFinal: phase ? FINAL_PHASES.has(phase) : false,
-    isCancellation: phase ? CANCELLATION_PHASES.has(phase) : false,
+    action,
+    statusId,
+    period,
+    isFinal: finalOutcome || (phase ? FINAL_PHASES.has(phase) : false),
+    isCancellation: cancelledOutcome || (phase ? CANCELLATION_PHASES.has(phase) : false),
     raw: event
   };
 }

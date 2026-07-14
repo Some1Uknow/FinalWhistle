@@ -28,9 +28,8 @@ async function main() {
   }
 
   console.log(`Fixture candidate: ${fixtureId}`);
-  const stream = await txline.openScoreStream(fixtureId);
-  await stream.cancel().catch(() => undefined);
-  console.log("Score stream opened and closed.");
+  const history = await txline.getHistorical(fixtureId);
+  console.log(`Historical scores response: ${history ? "available" : "empty"}`);
 
   if (config.txlineFinalityStatKey !== undefined) {
     try {

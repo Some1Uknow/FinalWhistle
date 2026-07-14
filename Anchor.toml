@@ -6,13 +6,16 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-final_whistle = "DaW6BCZ4AKUNwyEaoqik6xbrx9JcuqRbfhwzDstDEJWF"
+final_whistle = "Hf4KSaGy7EHEaT9jMCo9nKx2uQRz6BEsYS3DrprkDaPw"
+
+[programs.devnet]
+final_whistle = "Hf4KSaGy7EHEaT9jMCo9nKx2uQRz6BEsYS3DrprkDaPw"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

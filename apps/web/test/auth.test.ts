@@ -26,7 +26,7 @@ test("verifySignedRequest binds wallet signature to route, idempotency key, and 
     issuedAt: new Date().toISOString(),
     nonce: "nonce-123456",
     idempotencyKey: "idem-123456",
-    termsVersion: "2026-07-13",
+    termsVersion: "2026-07-14",
     termsAcceptedAt: new Date(Date.now() - 1_000).toISOString(),
     requestHash: requestHash({ params: {}, body })
   });

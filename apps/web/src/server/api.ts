@@ -5,6 +5,8 @@ import { verifySignedRequest } from "./auth";
 import { config, validateConfig } from "./config";
 import {
   defaultPredicateForTemplate,
+  normalizeScoreEvent,
+  toPublicMarket,
   type MarketTemplate,
   type Side
 } from "./domain";
@@ -32,7 +34,7 @@ import {
   withTransaction
 } from "./db";
 import { assertProofMatchesSettlement } from "./proof";
-import { clientIp, requireRateLimit, enterScoreStream } from "./rate-limit";
+import { requireRateLimit } from "./rate-limit";
 import {
   buildTxlineCancellationProofPayload,
   buildTxlineSettlementProofPayload,
@@ -41,6 +43,7 @@ import {
 import {
   assertOnchainMarketMatchesCreate,
   deriveProgramConfigPda,
+  getStakeTokenMetadata,
   requireConfirmedFinalWhistleInstruction,
   requireOnchainProgramConfig,
   requireOnchainMarketState,
@@ -63,7 +66,7 @@ const solanaPublicKeySchema = z.string().refine((value) => {
 }, "Must be a valid Solana public key");
 
 const createMarketSchema = z.object({
-  fixtureId: z.string().min(1).max(64),
+  fixtureId: z.string().regex(/^(?:0|[1-9]\d{0,17})$/, "Fixture id must be a canonical non-negative integer"),
   creator: solanaPublicKeySchema,
   marketNonce: z.string().regex(/^\d+$/),
   template: z.enum(["MATCH_WINNER", "TOTAL_GOALS_OVER_UNDER"]),
@@ -71,6 +74,9 @@ const createMarketSchema = z.object({
   tokenMint: solanaPublicKeySchema,
   escrowTokenAccount: solanaPublicKeySchema,
   thresholdMilli: z.number().int().optional(),
+  side: z.enum(["YES", "NO"]),
+  amount: z.string().regex(/^\d+$/).refine((value) => BigInt(value) > 0n, "Amount must be positive"),
+  onchainPosition: solanaPublicKeySchema,
   createTxSig: z.string().min(32),
   auth: authBodySchema
 });
@@ -86,7 +92,6 @@ const joinMarketSchema = z.object({
 
 const seqProofSchema = z.object({
   wallet: solanaPublicKeySchema,
-  seq: z.string().regex(/^\d+$/),
   auth: authBodySchema
 });
 
@@ -117,17 +122,23 @@ const claimSchema = z.object({
   auth: authBodySchema
 });
 
+const DEFAULT_READ_LIMIT = 50;
+const MAX_READ_LIMIT = 100;
+const MAX_CACHED_FIXTURES = 250;
+
 export async function health() {
   const configurationReady = hasOperationalConfig();
-  const [txlineResult, programConfigResult, databaseResult] = await Promise.allSettled([
+  const [txlineResult, programConfigResult, stakeMintResult, databaseResult] = await Promise.allSettled([
     txline.listFixtures(),
     requireOnchainProgramConfig(),
+    getStakeTokenMetadata(),
     databaseHealth()
   ]);
   const dependencies = {
     configuration: configurationReady ? "ok" : "unavailable",
     txline: txlineResult.status === "fulfilled" ? "ok" : "unavailable",
     programConfig: programConfigResult.status === "fulfilled" ? "ok" : "unavailable",
+    stakeMints: stakeMintResult.status === "fulfilled" ? "ok" : "unavailable",
     database: databaseResult.status === "fulfilled" ? "ok" : "unavailable"
   };
   const ok = Object.values(dependencies).every((value) => value === "ok");
@@ -137,10 +148,14 @@ export async function health() {
 export async function publicConfig() {
   const deploymentConfigured = hasOperationalConfig();
   let programConfigReady = false;
-  try {
-    await requireOnchainProgramConfig();
-    programConfigReady = true;
-  } catch {
+  let stakeTokens: Array<{ mint: string; symbol: string; decimals: number }> = [];
+  const [programConfigResult, tokenResult] = await Promise.allSettled([
+    requireOnchainProgramConfig(),
+    getStakeTokenMetadata()
+  ]);
+  if (programConfigResult.status === "fulfilled") programConfigReady = true;
+  if (tokenResult.status === "fulfilled") stakeTokens = tokenResult.value;
+  if (programConfigResult.status === "rejected" || tokenResult.status === "rejected") {
     // This public endpoint intentionally reports readiness without leaking
     // upstream error details or configuration values.
   }
@@ -149,76 +164,92 @@ export async function publicConfig() {
     programId: config.programId,
     txlineProgramId: config.txlineProgramId,
     allowedStakeMints: config.allowedStakeMints,
+    stakeTokens,
     deploymentConfigured,
     finalityConfigured: Boolean(config.txlineFinalityStatKey),
     programConfigReady,
-    replayEnabled: config.betaReplayFixtureIds.length > 0,
     devnetTokenFaucetUrl: config.devnetTokenFaucetUrl
   });
 }
 
 export async function fixtures(request: Request) {
   requireOperationalConfig();
-  requireRateLimit({ scope: "fixtures", request });
-  const url = new URL(request.url);
-  if (url.searchParams.get("mode") === "replay") {
-    return json({
-      source: "replay",
-      stale: true,
-      fixtures: config.betaReplayFixtureIds.map((id) => ({
-        id,
-        name: `Replay fixture ${id}`,
-        participant1: "Home",
-        participant2: "Away",
-        source: "replay",
-        stale: true,
-        updatedAt: new Date().toISOString()
-      }))
-    });
-  }
+  await requireRateLimit({ scope: "fixtures", request });
+  const limit = readLimit(request);
   const refresh = await refreshFixtures();
   if (!refresh.ok) return json(refresh.body, { status: refresh.status });
-  return json({ source: refresh.source, stale: refresh.stale, fixtures: await listFixtureViews(refresh.source, refresh.stale) });
+  return json({
+    source: refresh.source,
+    stale: refresh.stale,
+    limit,
+    fixtures: await listFixtureViews(refresh.source, refresh.stale, limit)
+  });
 }
 
 export async function fixtureMarkets(request: Request, params: { fixtureId: string }) {
   requireOperationalConfig();
-  requireRateLimit({ scope: "fixtures", request });
-  return json({ markets: await listFixtureMarkets(params.fixtureId) });
+  await requireRateLimit({ scope: "fixtures", request });
+  const limit = readLimit(request);
+  return json({
+    limit,
+    markets: (await listFixtureMarkets(params.fixtureId, limit)).map(toPublicMarket)
+  });
 }
 
 export async function fixtureMarketability(request: Request, params: { fixtureId: string }) {
   requireOperationalConfig();
-  requireRateLimit({ scope: "fixtures", request });
-  if (config.betaReplayFixtureIds.includes(params.fixtureId)) {
-    return json({ marketable: true, source: "replay", stale: true });
-  }
+  await requireRateLimit({ scope: "fixtures", request });
   const fixture = await getFixtureView(params.fixtureId);
   if (!fixture) return json({ marketable: false, reason: "Fixture is not available in the TxLINE cache" });
-  const fresh = !fixture.stale;
+  if (fixture.stale) {
+    return json({
+      marketable: false,
+      source: "cache",
+      stale: true,
+      reason: "Fixture data is stale; refresh live data before creating a market"
+    });
+  }
+  const kickoffMs = Date.parse(fixture.startsAt ?? "");
+  if (!Number.isFinite(kickoffMs)) {
+    return json({
+      marketable: false,
+      source: "cache",
+      stale: false,
+      reason: "Fixture kickoff time is unavailable; it cannot be used for a market"
+    });
+  }
+  if (kickoffMs <= Date.now()) {
+    return json({
+      marketable: false,
+      source: "cache",
+      stale: false,
+      reason: "This fixture has already started and cannot be used for a market"
+    });
+  }
   return json({
-    marketable: fresh,
+    marketable: true,
     source: "cache",
-    stale: !fresh,
-    reason: fresh ? undefined : "Fixture data is stale; refresh live data before creating a market"
+    stale: false
   });
 }
 
-export async function listMarkets() {
+export async function listMarkets(request: Request) {
   requireOperationalConfig();
+  await requireRateLimit({ scope: "fixtures", request });
+  const limit = readLimit(request);
   const [markets, fixtures] = await Promise.all([
-    listAllMarkets(),
-    listFixtureViews("cache", false)
+    listAllMarkets(limit),
+    listFixtureViews("cache", false, limit)
   ]);
   const fixturesById = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
   return json({
+    limit,
     markets: markets.map((market) => {
-      const replay = config.betaReplayFixtureIds.includes(market.fixtureId);
-      const fixture = replay ? undefined : fixturesById.get(market.fixtureId);
+      const fixture = fixturesById.get(market.fixtureId);
       return {
-        ...market,
-        fixtureName: fixture?.name ?? (replay ? `Replay fixture ${market.fixtureId}` : `Fixture ${market.fixtureId}`),
-        stale: replay || !fixture || fixture.stale
+        ...toPublicMarket(market),
+        fixtureName: fixture?.name ?? `Fixture ${market.fixtureId}`,
+        stale: !fixture || fixture.stale
       };
     })
   });
@@ -234,14 +265,15 @@ export async function portfolio(request: Request) {
   } catch {
     throw badRequest("wallet must be a valid Solana public key");
   }
-  requireRateLimit({ scope: "fixtures", request, wallet });
-  return json({ positions: await listWalletPositions(wallet) });
+  await requireRateLimit({ scope: "fixtures", request, wallet });
+  const limit = readLimit(request);
+  return json({ limit, positions: await listWalletPositions(wallet, limit) });
 }
 
 export async function createMarket(request: Request) {
   requireOperationalConfig();
   const body = createMarketSchema.parse(await request.json());
-  requireRateLimit({ scope: "write", request, wallet: body.creator });
+  await requireRateLimit({ scope: "write", request, wallet: body.creator });
   const auth = requireSignedRequest({
     request,
     route: "/api/markets",
@@ -249,18 +281,24 @@ export async function createMarket(request: Request) {
     body
   });
 
-  const replayFixture = config.betaReplayFixtureIds.includes(body.fixtureId);
-  const fixture = replayFixture ? undefined : await getFixtureView(body.fixtureId);
-  if (!replayFixture && !fixture) throw badRequest("Fixture not found in TxLINE cache");
-  if (!replayFixture && fixture?.stale) throw badRequest("Cannot create a market from stale fixture data");
+  const fixture = await getFixtureView(body.fixtureId);
+  if (!fixture) throw badRequest("Fixture not found in TxLINE cache");
+  if (fixture.stale) throw badRequest("Cannot create a market from stale fixture data");
 
   const tokenMint = new PublicKey(body.tokenMint).toBase58();
   if (!config.allowedStakeMints.includes(tokenMint)) throw badRequest("Stake token mint is not supported");
 
   const template = body.template as MarketTemplate;
   const predicate = defaultPredicateForTemplate(template, body.thresholdMilli);
-  const lockTs = BigInt(Math.floor(Date.parse(body.lockTs) / 1000));
-  if (lockTs <= BigInt(Math.floor(Date.now() / 1000))) throw badRequest("Lock time must be in the future");
+  const lockTimestampMs = Date.parse(body.lockTs);
+  if (!Number.isFinite(lockTimestampMs)) throw badRequest("Lock time must be a valid timestamp");
+  const lockTs = BigInt(Math.floor(lockTimestampMs / 1000));
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const kickoffMs = Date.parse(fixture.startsAt ?? "");
+  if (!Number.isFinite(kickoffMs)) throw badRequest("Fixture kickoff time is unavailable; it cannot be used for a market");
+  const kickoffSeconds = Math.floor(kickoffMs / 1000);
+  if (kickoffSeconds <= nowSeconds) throw badRequest("Fixture has already started and cannot be used for a market");
+  if (lockTs >= BigInt(kickoffSeconds)) throw badRequest("Lock time must be before fixture kickoff");
   const canonicalLockTs = new Date(Number(lockTs) * 1000).toISOString();
   const marketPda = deriveMarketPda({
     creator: body.creator,
@@ -272,6 +310,11 @@ export async function createMarket(request: Request) {
     signature: body.createTxSig,
     instruction: "create_market",
     requiredAccounts: [body.creator, programConfig, marketPda, body.escrowTokenAccount, tokenMint]
+  });
+  await requireConfirmedFinalWhistleInstruction({
+    signature: body.createTxSig,
+    instruction: "join_market",
+    requiredAccounts: [body.creator, marketPda, body.onchainPosition, body.escrowTokenAccount, tokenMint]
   });
   await requireOnchainProgramConfig();
   const onchainMarket = await requireOnchainMarketState({
@@ -292,6 +335,13 @@ export async function createMarket(request: Request) {
   } catch (error) {
     throw badRequest(error instanceof Error ? error.message : "On-chain market does not match request");
   }
+  const onchainPosition = await requireOnchainPositionState({
+    positionPda: body.onchainPosition,
+    expectedMarket: marketPda,
+    expectedUser: body.creator,
+    expectedSide: body.side,
+    expectedAmount: body.amount
+  });
 
   const committed = await commitAuthenticatedWrite({
     request,
@@ -309,15 +359,25 @@ export async function createMarket(request: Request) {
         createTxSig: body.createTxSig,
         template,
         predicate,
-        lockTs: canonicalLockTs
+        lockTs: canonicalLockTs,
+        settlementDeadlineTs: new Date(Number(BigInt(onchainMarket.settlementDeadlineTs)) * 1000).toISOString()
       }, executor);
+      await insertPosition({
+        id: randomUUID(),
+        marketId: market.id,
+        userWallet: onchainPosition.user,
+        side: body.side,
+        amount: onchainPosition.amount,
+        onchainPosition: body.onchainPosition
+      }, executor);
+      await recordJoin(market.id, body.side, body.amount, "OPEN", body.createTxSig, executor);
       return {
-        market,
+        market: await getMarket(market.id, executor),
         onchain: {
-          instruction: "create_market",
+          instruction: "create_market_and_join_market",
           marketPda,
           marketNonce: body.marketNonce,
-          mode: "CLIENT_SIGNS_AND_ESCROWS_FUNDS"
+          mode: "CLIENT_SIGNS_AND_ESCROWS_TEST_TOKENS"
         }
       };
     }
@@ -340,7 +400,7 @@ export async function joinMarket(request: Request, params: { marketId: string })
   if (market.status !== "OPEN") throw badRequest("Market is not open");
 
   const body = joinMarketSchema.parse(await request.json());
-  requireRateLimit({ scope: "write", request, wallet: body.userWallet });
+  await requireRateLimit({ scope: "write", request, wallet: body.userWallet });
   const auth = requireSignedRequest({
     request,
     route: "/api/markets/[marketId]/join",
@@ -406,33 +466,34 @@ export async function settlementProof(request: Request, params: { marketId: stri
   if (!market.marketPda) throw badRequest("Market is missing on-chain PDA");
 
   const body = seqProofSchema.parse(await request.json());
-  requireRateLimit({ scope: "proof", request, wallet: body.wallet });
+  await requireRateLimit({ scope: "proof", request, wallet: body.wallet });
   requireSignedRequest({ request, route: "/api/markets/[marketId]/settlement-proof", params, wallet: body.wallet, body });
   if (!config.txlineFinalityStatKey) throw serviceUnavailable("TXLINE_FINALITY_STAT_KEY is required for settlement");
   await requireOnchainProgramConfig();
+  const seq = await discoverFinalSequence(market.fixtureId, "settlement");
 
   const outcomeProof = await txline.getStatValidation({
     fixtureId: market.fixtureId,
-    seq: body.seq,
+    seq,
     statKey: market.predicate.statKey1,
     statKey2: market.predicate.statKey2
   });
   const finalityProof = await txline.getStatValidation({
     fixtureId: market.fixtureId,
-    seq: body.seq,
+    seq,
     statKey: config.txlineFinalityStatKey
   });
   assertProofMatchesSettlement({
     proof: outcomeProof.raw,
     fixtureId: market.fixtureId,
-    seq: body.seq,
+    seq,
     statKey1: market.predicate.statKey1,
     statKey2: market.predicate.statKey2
   });
   assertProofMatchesSettlement({
     proof: finalityProof.raw,
     fixtureId: market.fixtureId,
-    seq: body.seq,
+    seq,
     statKey1: config.txlineFinalityStatKey
   });
 
@@ -440,7 +501,7 @@ export async function settlementProof(request: Request, params: { marketId: stri
     market,
     settlement: buildTxlineSettlementProofPayload({
       market,
-      seq: body.seq,
+      seq,
       outcomeProof: outcomeProof.raw,
       finalityProof: finalityProof.raw
     })
@@ -455,20 +516,21 @@ export async function cancellationProof(request: Request, params: { marketId: st
   if (!market.marketPda) throw badRequest("Market is missing on-chain PDA");
 
   const body = seqProofSchema.parse(await request.json());
-  requireRateLimit({ scope: "proof", request, wallet: body.wallet });
+  await requireRateLimit({ scope: "proof", request, wallet: body.wallet });
   requireSignedRequest({ request, route: "/api/markets/[marketId]/cancellation-proof", params, wallet: body.wallet, body });
   if (!config.txlineFinalityStatKey) throw serviceUnavailable("TXLINE_FINALITY_STAT_KEY is required for cancellation");
   await requireOnchainProgramConfig();
+  const seq = await discoverFinalSequence(market.fixtureId, "cancellation");
 
   const cancellationProof = await txline.getStatValidation({
     fixtureId: market.fixtureId,
-    seq: body.seq,
+    seq,
     statKey: config.txlineFinalityStatKey
   });
   assertProofMatchesSettlement({
     proof: cancellationProof.raw,
     fixtureId: market.fixtureId,
-    seq: body.seq,
+    seq,
     statKey1: config.txlineFinalityStatKey
   });
 
@@ -476,7 +538,7 @@ export async function cancellationProof(request: Request, params: { marketId: st
     market,
     cancellation: buildTxlineCancellationProofPayload({
       market,
-      seq: body.seq,
+      seq,
       cancellationProof: cancellationProof.raw
     })
   });
@@ -490,7 +552,7 @@ export async function settleMarket(request: Request, params: { marketId: string 
   if (!market.marketPda) throw badRequest("Market is missing on-chain PDA");
 
   const body = settleSchema.parse(await request.json());
-  requireRateLimit({ scope: "write", request, wallet: body.wallet });
+  await requireRateLimit({ scope: "write", request, wallet: body.wallet });
   const auth = requireSignedRequest({ request, route: "/api/markets/[marketId]/settle", params, wallet: body.wallet, body });
   const programConfig = deriveProgramConfigPda().toBase58();
   await requireConfirmedFinalWhistleInstruction({
@@ -542,7 +604,7 @@ export async function cancelMarket(request: Request, params: { marketId: string 
   if (!market.marketPda) throw badRequest("Market is missing on-chain PDA");
 
   const body = cancelSchema.parse(await request.json());
-  requireRateLimit({ scope: "write", request, wallet: body.wallet });
+  await requireRateLimit({ scope: "write", request, wallet: body.wallet });
   const auth = requireSignedRequest({ request, route: "/api/markets/[marketId]/cancel", params, wallet: body.wallet, body });
   const programConfig = deriveProgramConfigPda().toBase58();
   await requireConfirmedFinalWhistleInstruction({
@@ -584,7 +646,7 @@ export async function cancelExpiredMarket(request: Request, params: { marketId: 
   if (!market.marketPda) throw badRequest("Market is missing on-chain PDA");
 
   const body = cancelExpiredSchema.parse(await request.json());
-  requireRateLimit({ scope: "write", request, wallet: body.wallet });
+  await requireRateLimit({ scope: "write", request, wallet: body.wallet });
   const auth = requireSignedRequest({ request, route: "/api/markets/[marketId]/cancel-expired", params, wallet: body.wallet, body });
   await requireConfirmedFinalWhistleInstruction({
     signature: body.cancelTxSig,
@@ -629,7 +691,7 @@ export async function claimPayout(request: Request, params: { marketId: string }
   if (!market.marketPda) throw badRequest("Market is missing on-chain PDA");
 
   const body = claimSchema.parse(await request.json());
-  requireRateLimit({ scope: "write", request, wallet: body.wallet });
+  await requireRateLimit({ scope: "write", request, wallet: body.wallet });
   const auth = requireSignedRequest({ request, route: "/api/markets/[marketId]/claim", params, wallet: body.wallet, body });
 
   const position = await getPositionForWallet({ marketId: market.id, userWallet: body.wallet });
@@ -683,57 +745,6 @@ export async function marketProof(_request: Request, params: { marketId: string 
       settlementMode: "Proof validated on-chain by TxLINE"
     },
     rawProofAvailable: Boolean(market.rawProof)
-  });
-}
-
-export async function scoreStream(request: Request) {
-  requireOperationalConfig();
-  const url = new URL(request.url);
-  const fixtureId = url.searchParams.get("fixtureId");
-  if (!fixtureId || fixtureId.length > 64) throw badRequest("A valid fixtureId is required for score streaming");
-  requireRateLimit({ scope: "stream", request });
-  const replayFixture = config.betaReplayFixtureIds.includes(fixtureId);
-  const fixture = replayFixture ? undefined : await getFixtureView(fixtureId);
-  if (!replayFixture && (!fixture || fixture.stale)) {
-    throw badRequest("Fixture is not available for live score streaming");
-  }
-  const leave = enterScoreStream(fixtureId, clientIp(request));
-  const encoder = new TextEncoder();
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
-
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      };
-      heartbeat = setInterval(() => send("heartbeat", { ts: new Date().toISOString() }), 15_000);
-      void (async () => {
-        try {
-          for await (const event of txline.normalizedScoreStream(fixtureId)) {
-            if (request.signal.aborted) break;
-            send("score", event);
-          }
-        } catch {
-          send("error", { message: "score stream failed" });
-        } finally {
-          if (heartbeat) clearInterval(heartbeat);
-          leave();
-          controller.close();
-        }
-      })();
-    },
-    cancel() {
-      if (heartbeat) clearInterval(heartbeat);
-      leave();
-    }
-  });
-
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive"
-    }
   });
 }
 
@@ -833,12 +844,34 @@ async function commitAuthenticatedWrite<T>(input: {
   });
 }
 
+let fixtureRefreshPromise: Promise<
+  | { ok: true; source: "txline" | "cache"; stale: boolean }
+  | { ok: false; status: number; body: Record<string, unknown> }
+> | undefined;
+
 async function refreshFixtures(): Promise<
   | { ok: true; source: "txline" | "cache"; stale: boolean }
   | { ok: false; status: number; body: Record<string, unknown> }
 > {
+  const newest = await newestFixtureUpdatedAt();
+  if (newest && Date.now() - newest < config.fixtureRefreshMinIntervalMs) {
+    return { ok: true, source: "cache", stale: false };
+  }
+  if (fixtureRefreshPromise) return fixtureRefreshPromise;
+  fixtureRefreshPromise = refreshFixturesFromUpstream();
   try {
-    const fixtures = await txline.listFixtures();
+    return await fixtureRefreshPromise;
+  } finally {
+    fixtureRefreshPromise = undefined;
+  }
+}
+
+async function refreshFixturesFromUpstream(): Promise<
+  | { ok: true; source: "txline" | "cache"; stale: boolean }
+  | { ok: false; status: number; body: Record<string, unknown> }
+> {
+  try {
+    const fixtures = (await txline.listFixtures()).slice(0, MAX_CACHED_FIXTURES);
     await withTransaction(async (executor) => {
       for (const fixture of fixtures) {
         const normalized = normalizeFixture(fixture);
@@ -865,14 +898,43 @@ async function refreshFixtures(): Promise<
   }
 }
 
+async function discoverFinalSequence(fixtureId: string, kind: "settlement" | "cancellation") {
+  const history = await txline.getHistorical(fixtureId);
+  const candidates: Array<{ seq: number; matches: boolean }> = [];
+  visitRecords(history, (record) => {
+    const event = normalizeScoreEvent(record);
+    const seq = event.seq;
+    const matches = kind === "settlement" ? event.isFinal === true : event.isCancellation === true;
+    if (typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0) candidates.push({ seq, matches });
+  });
+  const latest = candidates.filter((candidate) => candidate.matches).sort((a, b) => b.seq - a.seq)[0];
+  if (!latest) {
+    throw badRequest(kind === "settlement"
+      ? "TxLINE has not published a final result for this fixture"
+      : "TxLINE has not published a cancellable status for this fixture");
+  }
+  return String(latest.seq);
+}
+
+function visitRecords(value: unknown, visit: (record: Record<string, unknown>) => void, depth = 0) {
+  if (depth > 8 || value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) visitRecords(item, visit, depth + 1);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  visit(record);
+  for (const nested of Object.values(record)) visitRecords(nested, visit, depth + 1);
+}
+
 function normalizeFixture(input: unknown) {
   const fixture = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
   return {
-    id: firstString(fixture, ["fixtureId", "fixture_id", "id", "matchId"]),
-    name: firstString(fixture, ["name", "fixtureName", "matchName"]),
-    startsAt: firstString(fixture, ["startsAt", "startTime", "kickoff", "scheduledAt"]),
-    participant1: firstString(fixture, ["participant1", "homeTeam", "teamA", "competitor1"]),
-    participant2: firstString(fixture, ["participant2", "awayTeam", "teamB", "competitor2"]),
+    id: canonicalFixtureId(firstString(fixture, ["fixtureId", "fixture_id", "FixtureId", "id", "matchId"])),
+    name: firstString(fixture, ["name", "fixtureName", "matchName", "Competition"]),
+    startsAt: normalizeFixtureTimestamp(firstString(fixture, ["startsAt", "startTime", "kickoff", "scheduledAt", "StartTime"])),
+    participant1: firstString(fixture, ["participant1", "homeTeam", "teamA", "competitor1", "Participant1"]),
+    participant2: firstString(fixture, ["participant2", "awayTeam", "teamB", "competitor2", "Participant2"]),
     raw: fixture
   };
 }
@@ -886,14 +948,49 @@ function firstString(source: Record<string, unknown>, keys: string[]): string | 
   return undefined;
 }
 
+function canonicalFixtureId(value: string | undefined) {
+  if (!value || !/^\d{1,18}$/.test(value)) return undefined;
+  return BigInt(value).toString();
+}
+
+function normalizeFixtureTimestamp(value: string | undefined) {
+  if (!value) return undefined;
+  const numeric = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  const timestamp = Number.isFinite(numeric)
+    ? numeric < 100_000_000_000 ? numeric * 1_000 : numeric
+    : Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function readLimit(request: Request) {
+  const value = new URL(request.url).searchParams.get("limit");
+  if (value === null || value === "") return DEFAULT_READ_LIMIT;
+  if (!/^\d+$/.test(value)) throw badRequest(`limit must be an integer from 1 to ${MAX_READ_LIMIT}`);
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_READ_LIMIT) {
+    throw badRequest(`limit must be an integer from 1 to ${MAX_READ_LIMIT}`);
+  }
+  return limit;
+}
+
 function json(body: unknown, init?: ResponseInit) {
-  return Response.json(body, {
+  return Response.json(redactPrivateFields(body), {
     ...init,
     headers: {
       "cache-control": "no-store",
       ...init?.headers
     }
   });
+}
+
+function redactPrivateFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactPrivateFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== "rawProof" && key !== "raw_proof_json")
+      .map(([key, entry]) => [key, redactPrivateFields(entry)])
+  );
 }
 
 function badRequest(message: string) {

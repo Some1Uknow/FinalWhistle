@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
 import { config } from "./config";
-import { normalizeScoreEvent } from "./domain";
 
 type GuestSession = {
   jwt: string;
@@ -51,49 +49,11 @@ export class TxlineClient {
     return { raw, proofHash: proofHash(raw) };
   }
 
-  async openScoreStream(fixtureId?: string): Promise<ReadableStream<Uint8Array>> {
-    const search = new URLSearchParams();
-    if (fixtureId) search.set("fixtureId", fixtureId);
-    const suffix = search.size > 0 ? `?${search.toString()}` : "";
-    const response = await fetch(`${config.txlineApiBaseUrl}/scores/stream${suffix}`, {
-      headers: await this.headers()
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`TxLINE stream failed with ${response.status}`);
-    }
-    return response.body;
-  }
-
-  async *normalizedScoreStream(fixtureId?: string): AsyncGenerator<Record<string, unknown>> {
-    const body = await this.openScoreStream(fixtureId);
-    const nodeStream = Readable.fromWeb(body as never);
-    let buffer = "";
-
-    for await (const chunk of nodeStream) {
-      buffer += Buffer.from(chunk).toString("utf8");
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
-
-      for (const event of events) {
-        const dataLines = event
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim());
-        if (dataLines.length === 0) continue;
-
-        const data = dataLines.join("\n");
-        try {
-          yield normalizeScoreEvent(JSON.parse(data));
-        } catch {
-          yield normalizeScoreEvent({ data });
-        }
-      }
-    }
-  }
-
   private async requestJson<T>(path: string): Promise<T> {
     const response = await fetch(`${config.txlineApiBaseUrl}${path}`, {
-      headers: await this.headers()
+      headers: await this.headers(),
+      signal: AbortSignal.timeout(config.upstreamTimeoutMs),
+      cache: "no-store"
     });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
@@ -105,7 +65,7 @@ export class TxlineClient {
   private async headers(): Promise<Record<string, string>> {
     const jwt = await getGuestJwt();
     const headers: Record<string, string> = {
-      accept: "application/json, text/event-stream",
+      accept: "application/json",
       authorization: `Bearer ${jwt}`
     };
     if (config.txlineApiToken) headers["x-api-token"] = config.txlineApiToken;
@@ -120,7 +80,9 @@ async function getGuestJwt(): Promise<string> {
 
   const response = await fetch(`${config.txlineGuestBaseUrl}/auth/guest/start`, {
     method: "POST",
-    headers: { accept: "application/json" }
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(config.upstreamTimeoutMs),
+    cache: "no-store"
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");

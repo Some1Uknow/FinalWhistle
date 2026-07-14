@@ -143,6 +143,28 @@ export async function requireOnchainProgramConfig() {
   return state;
 }
 
+export async function getStakeTokenMetadata() {
+  return Promise.all(config.allowedStakeMints.map(async (mint) => {
+    const publicKey = new PublicKey(mint);
+    const account = await connection.getParsedAccountInfo(publicKey, "confirmed");
+    const parsed = account.value?.data && "parsed" in account.value.data
+      ? account.value.data.parsed as { type?: string; info?: { decimals?: number } }
+      : undefined;
+    if (!account.value || !account.value.owner.equals(new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"))) {
+      throw new Error(`Configured stake mint ${mint} is not a legacy SPL Token mint on devnet`);
+    }
+    const decimals = parsed?.type === "mint" ? parsed.info?.decimals : undefined;
+    if (!Number.isInteger(decimals) || decimals === undefined || decimals < 0 || decimals > 18) {
+      throw new Error(`Configured stake mint ${mint} has invalid mint metadata`);
+    }
+    return {
+      mint,
+      symbol: mint === "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" ? "USDC" : mint === "ELWTKspHKCnCfCiCiqYw1EDH77k8VCP74dK9qytG2Ujh" ? "USDT" : "TEST",
+      decimals
+    };
+  }));
+}
+
 export function assertOnchainMarketMatchesCreate(input: {
   onchain: OnchainMarketState;
   creator: string;

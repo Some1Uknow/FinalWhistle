@@ -17,11 +17,11 @@ jobs:
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
-          version: 10.11.0
+          version: 10.27.0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
@@ -40,10 +40,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build backend
+      - name: Build web app
         run: pnpm build
 
-      - name: Test backend
+      - name: Test web app and program
         run: pnpm test
 
       - name: Audit production Node dependencies
@@ -52,11 +52,8 @@ jobs:
       - name: Audit Rust dependencies
         run: cargo audit
 
-      - name: Build Anchor program
-        run: pnpm anchor:build
-
-      - name: Remove generated deploy keypair
-        run: rm -f target/deploy/final_whistle-keypair.json
+      - name: Build Solana program
+        run: cargo build-sbf --manifest-path programs/final_whistle/Cargo.toml
 
       - name: Public artifact scan
         run: |
