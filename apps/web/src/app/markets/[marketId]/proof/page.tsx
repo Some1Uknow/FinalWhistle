@@ -17,7 +17,7 @@ export default async function ProofPage({ params }: { params: Promise<{ marketId
     winningSide: market.winningSide,
     txlineSeq: market.txlineSeq,
     proofHash: market.proofHash,
-    settlementMode: "Proof validated on-chain by TxLINE"
+    settlementMode: "Recorded with a verified result proof"
   };
 
   return (

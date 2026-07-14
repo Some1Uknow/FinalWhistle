@@ -10,7 +10,7 @@ export function StatusBadge({ status, stale }: { status?: string; stale?: boolea
   const state = stale ? "STALE" : status ?? "OPEN";
   const label = stale
     ? "Updating"
-    : ({ OPEN: "Open to pick", LOCKED: "Match live", SETTLED: "Full time", CANCELLED: "Called off" } as Record<string, string>)[state] ?? state;
+    : ({ OPEN: "Open to pick", LOCKED: "Picks locked", SETTLED: "Result verified", CANCELLED: "Called off" } as Record<string, string>)[state] ?? state;
   return <span className={`status ${state.toLowerCase()}`}>{label}</span>;
 }
 
@@ -47,7 +47,11 @@ export function MarketCard({ market, fixtureName, stale }: { market: MarketRecor
 export function ProofReceipt({ receipt }: { receipt: Record<string, unknown> }) {
   const status = String(receipt.status ?? "PENDING");
   const verified = status === "SETTLED" || status === "CANCELLED";
-  const result = receipt.winningSide ? `${String(receipt.winningSide)} side` : verified ? "Result recorded" : "Still waiting";
+  const result = receipt.winningSide
+    ? String(receipt.template) === "MATCH_WINNER"
+      ? receipt.winningSide === "YES" ? "Home side won" : "Home side did not win"
+      : `${String(receipt.winningSide)} side`
+    : verified ? "Result recorded" : "Still waiting";
 
   return (
     <section className="nb-card accent-green receipt-card">
@@ -65,7 +69,7 @@ export function ProofReceipt({ receipt }: { receipt: Record<string, unknown> }) 
       <details className="receipt-details">
         <summary>Technical receipt</summary>
         <div className="metric-row">
-          <span>Match sequence</span>
+          <span>Result reference</span>
           <strong className="mono">{String(receipt.txlineSeq ?? "Waiting")}</strong>
         </div>
         <div className="proof-box mono">{String(receipt.proofHash ?? "No result receipt has been recorded yet")}</div>
@@ -95,13 +99,13 @@ export function truncate(value: string, chars = 4) {
 }
 
 function marketChoices(market: MarketRecord) {
-  if (market.template === "MATCH_WINNER") return { yes: "Home side", no: "Other side" };
+  if (market.template === "MATCH_WINNER") return { yes: "Home side wins", no: "Home does not win" };
   const line = (market.predicate.thresholdMilli / 1000).toLocaleString("en", { maximumFractionDigits: 2 });
   return { yes: `Over ${line}`, no: `${line} or fewer` };
 }
 
 function challengeQuestion(market: MarketRecord) {
-  if (market.template === "MATCH_WINNER") return "Who takes this one?";
+  if (market.template === "MATCH_WINNER") return "Will the home side win?";
   const line = (market.predicate.thresholdMilli / 1000).toLocaleString("en", { maximumFractionDigits: 2 });
   return `More than ${line} goals?`;
 }

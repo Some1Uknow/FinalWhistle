@@ -1,40 +1,45 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowUpRight, CircleDot } from "lucide-react";
+import { CircleDot } from "lucide-react";
+import { AppWalletButton } from "@/components/app-wallet";
 import { Providers } from "./providers";
+import "@solana/wallet-adapter-react-ui/styles.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Final Whistle — Make match night matter",
-  description: "Pick a side, challenge a friend, and let the final whistle settle the score."
+  title: "Final Whistle — Match-night challenges",
+  description: "A friendly place to pick a side, share the call, and follow the match through full time."
 };
+
+export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body>
         <div className="app-shell">
-          <header className="topbar">
-            <Link className="brand" href="/">
-              <span className="brand-mark"><CircleDot size={22} aria-hidden="true" /></span>
-              <span>Final Whistle</span>
-            </Link>
-            <nav className="nav" aria-label="Primary">
-              <Link href="/#matches">Matches</Link>
-              <Link href="/#how-it-works">How it works</Link>
-              <Link href="/portfolio">My picks</Link>
-              <Link className="nav-cta" href="/#matches">
-                Play now <ArrowUpRight size={16} aria-hidden="true" />
+          <Providers>
+            <header className="topbar">
+              <Link className="brand" href="/">
+                <span className="brand-mark"><CircleDot size={22} aria-hidden="true" /></span>
+                <span>Final Whistle</span>
               </Link>
-            </nav>
-          </header>
-          <Providers>{children}</Providers>
-          <footer className="site-footer">
-            <span className="footer-note">Test mode · no real-money play</span>
-            <span className="footer-links">
-              <Link href="/eligibility">Eligibility</Link> · <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
-            </span>
-          </footer>
+              <nav className="nav" aria-label="Primary">
+                <Link href="/matches">Matches</Link>
+                <Link href="/challenges">Challenges</Link>
+                <Link href="/portfolio">My picks</Link>
+                <Link href="/how-it-works">How it works</Link>
+              </nav>
+              <AppWalletButton />
+            </header>
+            {children}
+            <footer className="site-footer">
+              <span className="footer-note">Made for the group chat. Play kindly.</span>
+              <span className="footer-links">
+                <Link href="/eligibility">Eligibility</Link> · <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
+              </span>
+            </footer>
+          </Providers>
         </div>
       </body>
     </html>

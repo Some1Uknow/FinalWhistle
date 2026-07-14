@@ -8,13 +8,13 @@ export function MatchNightHero() {
         <p className="eyebrow"><Sparkles size={15} aria-hidden="true" /> Match-night challenges for friends</p>
         <h1 id="hero-title">Pick a side.<span>Make the match matter.</span></h1>
         <p className="hero-blurb">
-          One good call. One friend on the other side. A little more to cheer for until the final whistle.
+          One good call. One friend taking the other outcome. A little more to cheer for until the final whistle.
         </p>
         <div className="hero-actions">
-          <Link className="hero-button" href="#matches">
+          <Link className="hero-button" href="/matches">
             Find a match <ArrowRight size={18} aria-hidden="true" />
           </Link>
-          <Link className="hero-link" href="#how-it-works">See how it works</Link>
+          <Link className="hero-link" href="/how-it-works">See how it works</Link>
         </div>
         <div className="hero-safety">
           <span className="live-dot" aria-hidden="true" />
@@ -34,26 +34,16 @@ export function MatchNightHero() {
           <div className="pitch-circle" />
           <div className="pitch-ball"><span /></div>
         </div>
-        <div className="scoreboard-card">
-          <div className="scoreboard-topline"><span>TONIGHT&apos;S FRIENDLY</span><span>20:00</span></div>
-          <div className="scoreboard-teams">
-            <div className="art-team">
-              <span className="team-crest team-crest-blue">C</span>
-              <strong>Cobalt City</strong>
-            </div>
-            <span className="scoreboard-vs">VS</span>
-            <div className="art-team">
-              <span className="team-crest team-crest-coral">N</span>
-              <strong>Northshore</strong>
-            </div>
+        <div className="scoreboard-card hero-process-card">
+          <div className="scoreboard-topline"><span>FINAL WHISTLE</span><span>FOR FRIENDS</span></div>
+          <div className="hero-process" role="presentation">
+            <strong>Pick</strong><span>→</span><strong>Share</strong><span>→</span><strong>Settle</strong>
           </div>
         </div>
-        <div className="art-message art-message-one">I&apos;ve got Cobalt ⚽</div>
-        <div className="art-message art-message-two">You&apos;re on.</div>
         <div className="art-ticket">
-          <span>YOUR CALL</span>
-          <strong>Home side wins</strong>
-          <small>friendly challenge</small>
+          <span>FOR THE GROUP CHAT</span>
+          <strong>One call. Two sides.</strong>
+          <small>Until full time.</small>
         </div>
       </div>
     </section>

@@ -1,4 +1,5 @@
 node_modules/
+.pnpm-store/
 target/
 .anchor/
 dist/
@@ -9,6 +10,7 @@ apps/web/.data/
 *.db
 *.db-shm
 *.db-wal
+*.tsbuildinfo
 .env
 .env.*
 !.env.example

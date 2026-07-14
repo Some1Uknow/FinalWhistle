@@ -13,12 +13,12 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
     try {
       const response = await fetch("/api/fixtures");
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.message ?? "Live fixtures are unavailable");
+      if (!response.ok) throw new Error(payload.message ?? "Fixtures are unavailable");
       setFixtures(payload.fixtures ?? []);
       const count = payload.fixtures?.length ?? 0;
       setStatus(count ? `${count} ${count === 1 ? "match is" : "matches are"} waiting for a call.` : "Nothing on the board just yet.");
     } catch {
-      setStatus("The match board is taking a breather. Try again in a moment.");
+      setStatus("The match board couldn't refresh just now. Try again in a moment.");
     }
   }, []);
 
@@ -52,7 +52,7 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
           <span className="empty-ball" aria-hidden="true">⚽</span>
           <div>
             <h3>No match on the board right now.</h3>
-            <p>The next game will show up here as soon as it&apos;s ready to play.</p>
+            <p>The next game will show up here as soon as it&apos;s ready for a call.</p>
           </div>
         </div>
       )}
