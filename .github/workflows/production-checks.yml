@@ -17,7 +17,7 @@ jobs:
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
-          version: 10.27.0
+          version: 11.13.0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -33,9 +33,9 @@ jobs:
           tool: cargo-audit
 
       - name: Install Solana CLI
-        uses: solana-developers/github-workflows/.github/actions/setup-solana@6b27a8ccef6be708d7f11669af7007479ab42751
+        uses: solana-foundation/github-actions/setup-all@f0ddc2234ac4ac19c5c17f520b60bc2d7308744f # v0.2.11
         with:
-          solana-version: stable
+          solana_version: 3.1.14
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -57,7 +57,7 @@ jobs:
 
       - name: Public artifact scan
         run: |
-          matches="$(find . -maxdepth 4 \( -name '.env' -o -name '*.db' -o -name '*.db-shm' -o -name '*.db-wal' -o -name '*keypair*.json' -o -name '*.pem' -o -name '*.key' -o -name '*.secret' -o -name '*.p12' -o -name '*.pfx' -o -name 'credentials.json' -o -name 'service-account.json' \) -type f -print)"
+          matches="$(git ls-files | grep -E '(^|/)(\.env|credentials\.json|service-account\.json)$|(^|/)[^/]*(\.db(-shm|-wal)?|keypair[^/]*\.json|\.pem|\.key|\.secret|\.p12|\.pfx)$' || true)"
           if [ -n "$matches" ]; then
             echo "$matches"
             exit 1

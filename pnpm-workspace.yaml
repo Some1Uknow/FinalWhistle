@@ -1,2 +1,15 @@
 packages:
   - apps/web
+
+overrides:
+  uuid: 11.1.1
+  postcss: 8.5.18
+
+minimumReleaseAgeExclude:
+  - countries-list@3.4.1
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  bufferutil: false
+  utf-8-validate: false
