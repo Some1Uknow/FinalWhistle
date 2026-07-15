@@ -24,4 +24,4 @@ FinalWhistle is a friendly match-night challenge app for small groups. It should
 
 ## Voice
 
-Warm, concise, and honest. Prefer “test tokens”, “challenge”, “pick”, and “result”. Avoid “bet”, “winnings”, “profit”, “live” unless the state is verified, and technical implementation language in primary actions.
+Warm, concise, and honest. Prefer “devnet SOL”, “challenge”, “pick”, and “result”. Avoid “bet”, “winnings”, “profit”, “live” unless the state is verified, and technical implementation language in primary actions.

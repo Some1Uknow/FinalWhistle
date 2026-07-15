@@ -19,8 +19,13 @@ const TXLINE_DEVNET_PROGRAM_ID: &str = "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715w
 const TXLINE_VALIDATE_STAT_DISCRIMINATOR: [u8; 8] = [107, 197, 232, 90, 191, 136, 105, 185];
 const SETTLEMENT_GRACE_PERIOD_SECONDS: i64 = 14 * 24 * 60 * 60;
 const MAX_MARKET_OPEN_SECONDS: i64 = 24 * 60 * 60;
-const DEVNET_USDC_MINT: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
-const TXLINE_DEVNET_USDT_MINT: &str = "ELWTKspHKCnCfCiCiqYw1EDH77k8VCP74dK9qytG2Ujh";
+/// The legacy SPL native mint. Clients wrap ordinary devnet SOL immediately
+/// before escrow and unwrap it after payout collection, so users never need a
+/// separate test token.
+const WRAPPED_SOL_MINT: &str = "So11111111111111111111111111111111111111112";
+/// TxLINE documents a `game_finalised` record with `period = 100`. The period
+/// is part of the Merkle-proven score-stat leaf and is enforced on-chain.
+const TXLINE_FINAL_RECORD_PERIOD: i32 = 100;
 
 #[program]
 pub mod final_whistle {
@@ -29,25 +34,21 @@ pub mod final_whistle {
     /// Creates the immutable trust root used for every market and TxLINE
     /// settlement. Only the program's current upgrade authority may execute
     /// this instruction, so an arbitrary transaction signer cannot choose a
-    /// different finality stat or CPI target.
+    /// different CPI target.
     pub fn initialize_config(
         ctx: Context<InitializeConfig>,
         txline_program: Pubkey,
-        finality_stat_key: u32,
     ) -> Result<()> {
         require_allowed_txline_program(txline_program)?;
-        require!(finality_stat_key > 0, FinalWhistleError::InvalidFinalityStatKey);
 
         let config = &mut ctx.accounts.config;
         config.authority = ctx.accounts.authority.key();
         config.txline_program = txline_program;
-        config.finality_stat_key = finality_stat_key;
         config.bump = ctx.bumps.config;
 
         emit!(ProgramConfigured {
             authority: config.authority,
             txline_program: config.txline_program,
-            finality_stat_key: config.finality_stat_key,
         });
         Ok(())
     }
@@ -230,10 +231,6 @@ pub mod final_whistle {
             program_config.txline_program,
             FinalWhistleError::InvalidTxlineProgram
         );
-        require!(
-            args.finality_stat_key == program_config.finality_stat_key,
-            FinalWhistleError::FinalityStatKeyMismatch
-        );
         require!(args.fixture_id.to_string() == market.fixture_id, FinalWhistleError::FixtureMismatch);
         require!(args.stat_key_1 == u32::from(market.stat_key_1), FinalWhistleError::StatKeyMismatch);
         require!(args.seq > market.settlement_txline_seq, FinalWhistleError::InvalidSequence);
@@ -243,25 +240,22 @@ pub mod final_whistle {
             require!(args.outcome_proof.stat_b.is_some(), FinalWhistleError::MissingSecondStat);
         }
         require!(
-            args.finality_proof.stat_a.stat_to_prove.value == args.final_phase_id,
+            is_final_record_period(args.outcome_proof.stat_a.stat_to_prove.period),
             FinalWhistleError::MatchNotFinal
         );
+        if let Some(stat_b) = args.outcome_proof.stat_b.as_ref() {
+            require!(
+                is_final_record_period(stat_b.stat_to_prove.period),
+                FinalWhistleError::MatchNotFinal
+            );
+        }
         require_txline_proof_fixture(&args.outcome_proof, args.fixture_id)?;
-        require_txline_proof_fixture(&args.finality_proof, args.fixture_id)?;
-        require_matching_txline_snapshot(&args.outcome_proof, &args.finality_proof)?;
         require_txline_proof_stat(&args.outcome_proof, args.stat_key_1, args.stat_key_2)?;
-        require_txline_proof_stat(&args.finality_proof, args.finality_stat_key, None)?;
-        require!(is_final_phase_id(args.final_phase_id), FinalWhistleError::MatchNotFinal);
 
         validate_txline_stat(
             ctx.accounts.txline_program.to_account_info(),
             ctx.accounts.daily_scores_merkle_roots.to_account_info(),
             &args.outcome_proof,
-        )?;
-        validate_txline_stat(
-            ctx.accounts.txline_program.to_account_info(),
-            ctx.accounts.daily_scores_merkle_roots.to_account_info(),
-            &args.finality_proof,
         )?;
 
         let observed = match market.operator {
@@ -294,7 +288,7 @@ pub mod final_whistle {
             Comparison::Equal => observed == market.threshold_milli,
         };
 
-        let proof_hash = hash_settlement_proofs(&args.outcome_proof, &args.finality_proof)?;
+        let proof_hash = hash_settlement_proof(&args.outcome_proof)?;
 
         market.status = MarketStatus::Settled;
         market.winning_side = Some(if predicate_true { Side::Yes } else { Side::No });
@@ -318,10 +312,6 @@ pub mod final_whistle {
             program_config.txline_program,
             FinalWhistleError::InvalidTxlineProgram
         );
-        require!(
-            args.cancellation_stat_key == program_config.finality_stat_key,
-            FinalWhistleError::FinalityStatKeyMismatch
-        );
         require_market_action_window(
             market.status,
             Clock::get()?.unix_timestamp,
@@ -331,11 +321,11 @@ pub mod final_whistle {
         require!(args.fixture_id.to_string() == market.fixture_id, FinalWhistleError::FixtureMismatch);
         require!(args.seq > market.settlement_txline_seq, FinalWhistleError::InvalidSequence);
         require!(
-            args.cancellation_proof.stat_a.stat_to_prove.value == args.cancellation_phase_id,
+            args.cancellation_proof.stat_a.stat_to_prove.period == args.cancellation_phase_id,
             FinalWhistleError::InvalidCancellationPhase
         );
         require_txline_proof_fixture(&args.cancellation_proof, args.fixture_id)?;
-        require_txline_proof_stat(&args.cancellation_proof, args.cancellation_stat_key, None)?;
+        require_txline_proof_stat(&args.cancellation_proof, u32::from(market.stat_key_1), None)?;
         require!(
             is_cancel_phase_id(args.cancellation_phase_id),
             FinalWhistleError::InvalidCancellationPhase
@@ -570,12 +560,11 @@ pub struct Market {
 pub struct ProgramConfig {
     pub authority: Pubkey,
     pub txline_program: Pubkey,
-    pub finality_stat_key: u32,
     pub bump: u8,
 }
 
 impl ProgramConfig {
-    pub const SPACE: usize = 8 + 32 + 32 + 4 + 1;
+    pub const SPACE: usize = 8 + 32 + 32 + 1;
 }
 
 impl Market {
@@ -670,7 +659,6 @@ pub struct PayoutClaimed {
 pub struct ProgramConfigured {
     pub authority: Pubkey,
     pub txline_program: Pubkey,
-    pub finality_stat_key: u32,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -751,9 +739,6 @@ pub struct TxlineValidationArgs {
     pub stat_key_1: u32,
     pub stat_key_2: Option<u32>,
     pub outcome_proof: TxlineStatValidationProof,
-    pub finality_proof: TxlineStatValidationProof,
-    pub finality_stat_key: u32,
-    pub final_phase_id: i32,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -761,7 +746,6 @@ pub struct CancellationArgs {
     pub fixture_id: i64,
     pub seq: u64,
     pub cancellation_proof: TxlineStatValidationProof,
-    pub cancellation_stat_key: u32,
     pub cancellation_phase_id: i32,
 }
 
@@ -830,12 +814,12 @@ pub enum TxlineBinaryExpression {
     Subtract,
 }
 
-fn is_final_phase_id(phase_id: i32) -> bool {
-    matches!(phase_id, 5 | 10 | 13)
-}
-
 fn is_cancel_phase_id(phase_id: i32) -> bool {
     matches!(phase_id, 14 | 15 | 16 | 17 | 18 | 19)
+}
+
+fn is_final_record_period(period: i32) -> bool {
+    period == TXLINE_FINAL_RECORD_PERIOD
 }
 
 /// Once an expiry refund is available, proof-based state changes must stop so
@@ -879,26 +863,6 @@ fn require_txline_proof_fixture(proof: &TxlineStatValidationProof, fixture_id: i
     Ok(())
 }
 
-/// A finality proof can be valid while an older score proof is also valid. A
-/// settlement must use both values from the same TxLINE fixture snapshot, or a
-/// caller could combine a pre-final score with a later finality record.
-fn require_matching_txline_snapshot(
-    outcome_proof: &TxlineStatValidationProof,
-    finality_proof: &TxlineStatValidationProof,
-) -> Result<()> {
-    let outcome = &outcome_proof.fixture_summary;
-    let finality = &finality_proof.fixture_summary;
-    require!(
-        outcome.fixture_id == finality.fixture_id
-            && outcome.update_stats.update_count == finality.update_stats.update_count
-            && outcome.update_stats.min_timestamp == finality.update_stats.min_timestamp
-            && outcome.update_stats.max_timestamp == finality.update_stats.max_timestamp
-            && outcome.events_sub_tree_root == finality.events_sub_tree_root,
-        FinalWhistleError::TxlineProofSnapshotMismatch
-    );
-    Ok(())
-}
-
 fn require_txline_proof_stat(
     proof: &TxlineStatValidationProof,
     stat_key_1: u32,
@@ -923,27 +887,15 @@ fn require_txline_proof_stat(
     Ok(())
 }
 
-/// Hash the exact Borsh-encoded proof payloads accepted by this program. The
-/// hash is derived on-chain rather than supplied by the caller, making the
-/// stored receipt cryptographically tied to the evidence that was CPI-checked.
-fn hash_settlement_proofs(
-    outcome_proof: &TxlineStatValidationProof,
-    finality_proof: &TxlineStatValidationProof,
-) -> Result<[u8; 32]> {
-    let mut outcome_bytes = Vec::new();
+/// Hash the exact Borsh-encoded proof accepted by this program. The hash is
+/// derived on-chain rather than supplied by the caller, making the stored
+/// receipt cryptographically tied to evidence that was CPI-checked.
+fn hash_settlement_proof(outcome_proof: &TxlineStatValidationProof) -> Result<[u8; 32]> {
+    let mut proof_bytes = Vec::new();
     outcome_proof
-        .serialize(&mut outcome_bytes)
+        .serialize(&mut proof_bytes)
         .map_err(|_| error!(FinalWhistleError::InvalidTxlineProof))?;
-    let mut finality_bytes = Vec::new();
-    finality_proof
-        .serialize(&mut finality_bytes)
-        .map_err(|_| error!(FinalWhistleError::InvalidTxlineProof))?;
-    Ok(hashv(&[
-        b"final_whistle:settlement:v1",
-        outcome_bytes.as_slice(),
-        finality_bytes.as_slice(),
-    ])
-    .to_bytes())
+    Ok(hashv(&[b"final_whistle:settlement:v2", proof_bytes.as_slice()]).to_bytes())
 }
 
 fn hash_cancellation_proof(proof: &TxlineStatValidationProof) -> Result<[u8; 32]> {
@@ -961,16 +913,9 @@ fn require_allowed_txline_program(program_id: Pubkey) -> Result<()> {
 }
 
 fn require_allowed_stake_mint(mint: Pubkey) -> Result<()> {
-    for allowed in [
-        DEVNET_USDC_MINT,
-        TXLINE_DEVNET_USDT_MINT,
-    ] {
-        let allowed = Pubkey::from_str(allowed).map_err(|_| FinalWhistleError::InvalidStakeMint)?;
-        if mint == allowed {
-            return Ok(());
-        }
-    }
-    err!(FinalWhistleError::InvalidStakeMint)
+    let wrapped_sol = Pubkey::from_str(WRAPPED_SOL_MINT).map_err(|_| FinalWhistleError::InvalidStakeMint)?;
+    require!(mint == wrapped_sol, FinalWhistleError::InvalidStakeMint);
+    Ok(())
 }
 
 fn validate_txline_stat<'info>(
@@ -1093,12 +1038,6 @@ pub enum FinalWhistleError {
     InvalidProgramConfig,
     #[msg("Only the FinalWhistle upgrade authority may initialize configuration")]
     UnauthorizedConfigAuthority,
-    #[msg("The configured TxLINE finality stat key is invalid")]
-    InvalidFinalityStatKey,
-    #[msg("The TxLINE finality stat key does not match program configuration")]
-    FinalityStatKeyMismatch,
-    #[msg("TxLINE outcome and finality proofs must use the same fixture snapshot")]
-    TxlineProofSnapshotMismatch,
     #[msg("Market is past its settlement or proof-cancellation window")]
     MarketActionWindowExpired,
 }
@@ -1148,9 +1087,8 @@ mod tests {
     }
 
     #[test]
-    fn only_devnet_beta_stake_mints_are_accepted() {
-        assert!(require_allowed_stake_mint(Pubkey::from_str(DEVNET_USDC_MINT).unwrap()).is_ok());
-        assert!(require_allowed_stake_mint(Pubkey::from_str(TXLINE_DEVNET_USDT_MINT).unwrap()).is_ok());
+    fn only_wrapped_devnet_sol_is_accepted() {
+        assert!(require_allowed_stake_mint(Pubkey::from_str(WRAPPED_SOL_MINT).unwrap()).is_ok());
         assert!(require_allowed_stake_mint(
             Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap()
         )
@@ -1169,49 +1107,10 @@ mod tests {
     }
 
     #[test]
-    fn settlement_proofs_must_share_the_fixture_snapshot() {
-        let mut outcome = TxlineStatValidationProof {
-            ts: 1,
-            fixture_summary: TxlineScoresBatchSummary {
-                fixture_id: 17_952_170,
-                update_stats: TxlineScoresUpdateStats {
-                    update_count: 3,
-                    min_timestamp: 1_700_000_000_000,
-                    max_timestamp: 1_700_000_050_000,
-                },
-                events_sub_tree_root: [7; 32],
-            },
-            fixture_proof: vec![],
-            main_tree_proof: vec![],
-            predicate: TxlineTraderPredicate {
-                threshold: 0,
-                comparison: TxlineComparison::GreaterThan,
-            },
-            stat_a: TxlineStatTerm {
-                stat_to_prove: TxlineScoreStat {
-                    key: 1,
-                    value: 2,
-                    period: 0,
-                },
-                event_stat_root: [0; 32],
-                stat_proof: vec![],
-            },
-            stat_b: None,
-            op: None,
-        };
-        let mut finality = outcome.clone();
-
-        assert!(require_matching_txline_snapshot(&outcome, &finality).is_ok());
-
-        finality.fixture_summary.update_stats.update_count += 1;
-        assert!(require_matching_txline_snapshot(&outcome, &finality).is_err());
-
-        finality = outcome.clone();
-        finality.fixture_summary.events_sub_tree_root = [8; 32];
-        assert!(require_matching_txline_snapshot(&outcome, &finality).is_err());
-
-        outcome.fixture_summary.fixture_id += 1;
-        assert!(require_matching_txline_snapshot(&outcome, &finality).is_err());
+    fn only_documented_final_record_period_is_accepted() {
+        assert!(is_final_record_period(100));
+        assert!(!is_final_record_period(5));
+        assert!(!is_final_record_period(14));
     }
 
     #[test]

@@ -9,6 +9,8 @@
     "start": "next start",
     "test": "tsx --test test/**/*.test.ts",
     "db:migrate": "tsx scripts/migrate-database.ts",
+    "devnet:sol-smoke": "tsx scripts/devnet-sol-smoke.ts",
+    "txline:activate": "tsx scripts/txline-activate.ts",
     "txline:smoke": "tsx scripts/txline-smoke.ts",
     "reconcile:onchain": "tsx scripts/reconcile-onchain.ts",
     "program:initialize-config": "tsx scripts/initialize-program-config.ts"

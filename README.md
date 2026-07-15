@@ -2,13 +2,13 @@
 
 FinalWhistle is a football challenge app for people who want to make a simple, head-to-head prediction about a match.
 
-You choose a supported match and prediction, such as “Team A wins” or “more than 2.5 goals.” Another person takes the opposite side. Each person puts up the same amount of devnet test tokens. When the match is finished, the result is checked through TxLINE and the winning side can claim the payout.
+You choose a supported match and prediction, such as “Team A wins” or “more than 2.5 goals.” Another person takes the opposite side. Each person puts up the same amount of normal devnet SOL. The app wraps SOL only inside the escrow transaction and unwraps a payout back to SOL automatically. When the match is finished, the result is checked through TxLINE and the winning side can claim the payout.
 
-This is an early public beta. It runs on Solana devnet and uses test tokens only. Do not use real money, real tokens, or production wallets with this project.
+This is an early public beta. It runs on Solana devnet, where SOL has no real-world value. Do not use real money, real tokens, or production wallets with this project.
 
 ## Current deployment status
 
-The devnet program and database schema are deployed, but the immutable on-chain settlement configuration is deliberately not initialized. Until the TxLINE credentials and a provider-confirmed, on-chain-verifiable finality mapping are supplied, `/api/health` remains `503` and market writes stay disabled. This is a fail-closed release gate, not a fallback to unverified settlement.
+The devnet program, database schema, TxLINE integration, and immutable on-chain settlement configuration are deployed. The app fails closed whenever its configuration, TxLINE service, stake mint, database, or on-chain program configuration is unavailable.
 
 ## What is included
 
@@ -71,15 +71,15 @@ The Anchor program supports:
 - `cancel_market` — cancels a market using a valid cancellation proof or timeout rule.
 - `claim_payout` — lets a winner or refunded participant withdraw funds.
 
-The escrow is an SPL token account controlled by the market PDA. The program stores the market rule, stakes, status, winning side, proof hash, and other settlement data on-chain so the payout rules cannot be changed by the API after a market is created.
+The escrow is a wrapped-SOL SPL token account controlled by the market PDA. The browser converts ordinary devnet SOL to wrapped SOL in the same transaction that funds escrow, then closes the wrapped-SOL account after a payout so the wallet receives ordinary SOL again. The program stores the market rule, stakes, status, winning side, proof hash, and other settlement data on-chain so the payout rules cannot be changed by the API after a market is created.
 
 ### Match proofs and settlement
 
 The API prepares proof arguments and the Anchor program performs the configured TxLINE validation CPI before accepting a settlement or cancellation. The API cannot move escrow or simply assert a match result.
 
-An immutable on-chain `ProgramConfig` records the approved TxLINE program and finality stat key. Only the program upgrade authority can initialize that configuration. The public devnet program is intentionally unconfigured at present, so writes fail closed rather than falling back to unverified match data.
+An immutable on-chain `ProgramConfig` records the approved TxLINE program. Only the program upgrade authority can initialize that configuration. No API setting can substitute a different validator program.
 
-TxLINE's current Devnet SDK identifies a final soccer record by `action=game_finalised`, `statusId=100`, and `period=100`. FinalWhistle's current ABI additionally requires a provider-confirmed on-chain finality-stat mapping. That mapping has not been configured or guessed. Do not initialize `ProgramConfig` until TxLINE confirms a compatible proof path; otherwise upgrade the settlement ABI to the documented validation format and audit/redeploy it first.
+TxLINE's current Devnet SDK identifies a final soccer record by `action=game_finalised`, `statusId=100`, and `period=100`. FinalWhistle validates the score proof through TxLINE on-chain and requires each proven final score stat to have Merkle-proven `period=100`; it does not rely on a guessed extra finality stat key. Cancellation proofs likewise require a TxLINE-proven documented cancellation period.
 
 Open markets can expire after their lock time, and locked markets have a settlement grace period for unresolved proofs. After the relevant deadline, only the explicit expiry-refund path can close a market.
 
@@ -105,8 +105,8 @@ The public beta is devnet-only and requires:
 
 - `PUBLIC_ORIGIN` set to the deployed frontend origin;
 - a pooled PostgreSQL `DATABASE_URL`;
-- `TXLINE_API_TOKEN` and a provider-confirmed `TXLINE_FINALITY_STAT_KEY`/proof mapping from secret storage and TxLINE;
-- an explicit devnet `ALLOWED_STAKE_MINTS` list;
+- `TXLINE_API_TOKEN` from secret storage and TxLINE;
+- `ALLOWED_STAKE_MINTS=So11111111111111111111111111111111111111112` for wrapped native SOL;
 - a deployed Anchor program with its immutable `ProgramConfig` initialized; and
 - `REQUIRE_IDEMPOTENCY_KEYS=true`.
 

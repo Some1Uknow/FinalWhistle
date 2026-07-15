@@ -36,7 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </header>
             {children}
             <footer className="site-footer">
-              <span className="footer-note">Devnet beta · Test tokens have no cash value</span>
+              <span className="footer-note">Devnet beta · Devnet SOL has no cash value</span>
               <span className="footer-links">
                 <Link href="/how-it-works">How it works</Link> · <Link href="/eligibility">Eligibility</Link> · <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
               </span>

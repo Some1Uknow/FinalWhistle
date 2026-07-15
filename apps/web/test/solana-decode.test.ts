@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { PublicKey } from "@solana/web3.js";
-import { assertOnchainMarketMatchesCreate, decodeMarketAccount, decodePositionAccount } from "../src/server/solana";
+import {
+  assertOnchainMarketMatchesCreate,
+  decodeMarketAccount,
+  decodePositionAccount,
+  decodeProgramConfigAccount
+} from "../src/server/solana";
 
 const creator = new PublicKey("11111111111111111111111111111111");
 const escrow = new PublicKey("So11111111111111111111111111111111111111112");
-const mint = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+const mint = new PublicKey("So11111111111111111111111111111111111111112");
 const user = new PublicKey("SysvarC1ock11111111111111111111111111111111");
 const accountDiscriminator = (name: string) => createHash("sha256").update(`account:${name}`).digest().subarray(0, 8);
 
@@ -108,6 +113,20 @@ test("decodePositionAccount decodes Anchor position state", () => {
   assert.equal(decoded.side, "NO");
   assert.equal(decoded.amount, "500");
   assert.equal(decoded.claimed, false);
+});
+
+test("decodeProgramConfigAccount decodes the hardened TxLINE-only configuration", () => {
+  const txline = new PublicKey("6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J");
+  const data = Buffer.alloc(8 + 32 + 32 + 1);
+  accountDiscriminator("ProgramConfig").copy(data, 0);
+  creator.toBuffer().copy(data, 8);
+  txline.toBuffer().copy(data, 40);
+  data.writeUInt8(254, 72);
+
+  assert.deepEqual(decodeProgramConfigAccount(data), {
+    authority: creator.toBase58(),
+    txlineProgram: txline.toBase58()
+  });
 });
 
 test("market indexing rejects an on-chain predicate that differs from the advertised rule", () => {

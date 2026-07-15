@@ -2,8 +2,8 @@ import { PublicKey } from "@solana/web3.js";
 import { config } from "./config";
 import type { MarketRecord } from "./domain";
 
-const FINAL_PHASE_IDS = new Set([5, 10, 13]);
 const CANCELLATION_PHASE_IDS = new Set([14, 15, 16, 17, 18, 19]);
+const FINAL_RECORD_PERIOD = 100;
 const ALWAYS_TRUE_THRESHOLD = -2_147_483_648;
 
 export type TxlineSettlementProofPayload = {
@@ -17,9 +17,6 @@ export type TxlineSettlementProofPayload = {
     statKey1: number;
     statKey2?: number;
     outcomeProof: TxlineStatValidationProof;
-    finalityProof: TxlineStatValidationProof;
-    finalityStatKey: number;
-    finalPhaseId: number;
   };
 };
 
@@ -32,7 +29,6 @@ export type TxlineCancellationProofPayload = {
     fixtureId: string;
     seq: string;
     cancellationProof: TxlineStatValidationProof;
-    cancellationStatKey: number;
     cancellationPhaseId: number;
   };
 };
@@ -86,31 +82,14 @@ export function buildTxlineSettlementProofPayload(input: {
   market: MarketRecord;
   seq: string;
   outcomeProof: unknown;
-  finalityProof: unknown;
 }): TxlineSettlementProofPayload {
-  if (!config.txlineFinalityStatKey) {
-    throw new Error("TXLINE_FINALITY_STAT_KEY is required for production settlement");
-  }
-
   const outcomeProof = toTxlineStatValidationProof(input.outcomeProof, {
     statKey1: input.market.predicate.statKey1,
     statKey2: input.market.predicate.statKey2,
     operator: input.market.predicate.operator
   });
-  const finalityProof = toTxlineStatValidationProof(input.finalityProof, {
-    statKey1: config.txlineFinalityStatKey,
-    operator: "NONE"
-  });
-  assertMatchingTxlineSnapshot(outcomeProof, finalityProof);
+  assertFinalRecordPeriod(outcomeProof);
   const outcomeDailyScores = deriveDailyScoresPda(extractMinTimestamp(outcomeProof));
-  const finalityDailyScores = deriveDailyScoresPda(extractMinTimestamp(finalityProof));
-  if (outcomeDailyScores !== finalityDailyScores) {
-    throw new Error("TxLINE settlement proofs resolve to different daily score roots");
-  }
-  const finalPhaseId = extractStatValue(finalityProof);
-  if (!FINAL_PHASE_IDS.has(finalPhaseId)) {
-    throw new Error(`TxLINE proof phase is not final: ${finalPhaseId}`);
-  }
 
   return {
     mode: "VALIDATED_ON_CHAIN_BY_TXLINE",
@@ -122,10 +101,7 @@ export function buildTxlineSettlementProofPayload(input: {
       seq: input.seq,
       statKey1: input.market.predicate.statKey1,
       statKey2: input.market.predicate.statKey2,
-      outcomeProof,
-      finalityProof,
-      finalityStatKey: config.txlineFinalityStatKey,
-      finalPhaseId
+      outcomeProof
     }
   };
 }
@@ -135,15 +111,11 @@ export function buildTxlineCancellationProofPayload(input: {
   seq: string;
   cancellationProof: unknown;
 }): TxlineCancellationProofPayload {
-  if (!config.txlineFinalityStatKey) {
-    throw new Error("TXLINE_FINALITY_STAT_KEY is required for production cancellation");
-  }
-
   const cancellationProof = toTxlineStatValidationProof(input.cancellationProof, {
-    statKey1: config.txlineFinalityStatKey,
+    statKey1: input.market.predicate.statKey1,
     operator: "NONE"
   });
-  const cancellationPhaseId = extractStatValue(cancellationProof);
+  const cancellationPhaseId = cancellationProof.statA.statToProve.period;
   if (!CANCELLATION_PHASE_IDS.has(cancellationPhaseId)) {
     throw new Error(`TxLINE proof phase is not cancellable: ${cancellationPhaseId}`);
   }
@@ -156,7 +128,6 @@ export function buildTxlineCancellationProofPayload(input: {
       fixtureId: input.market.fixtureId,
       seq: input.seq,
       cancellationProof,
-      cancellationStatKey: config.txlineFinalityStatKey,
       cancellationPhaseId
     }
   };
@@ -228,27 +199,10 @@ export function toTxlineStatValidationProof(
   };
 }
 
-/**
- * A valid finality proof and a valid score proof are not necessarily from the
- * same score update. Keep the browser from constructing a transaction the
- * program will reject, and make the inconsistency explicit before signing.
- */
-export function assertMatchingTxlineSnapshot(
-  outcomeProof: TxlineStatValidationProof,
-  finalityProof: TxlineStatValidationProof
-) {
-  const outcome = outcomeProof.fixtureSummary;
-  const finality = finalityProof.fixtureSummary;
-  const sameRoot = outcome.eventsSubTreeRoot.length === finality.eventsSubTreeRoot.length &&
-    outcome.eventsSubTreeRoot.every((byte, index) => byte === finality.eventsSubTreeRoot[index]);
-  const sameSnapshot =
-    outcome.fixtureId === finality.fixtureId &&
-    outcome.updateStats.updateCount === finality.updateStats.updateCount &&
-    outcome.updateStats.minTimestamp === finality.updateStats.minTimestamp &&
-    outcome.updateStats.maxTimestamp === finality.updateStats.maxTimestamp &&
-    sameRoot;
-  if (!sameSnapshot) {
-    throw new Error("TxLINE outcome and finality proofs must use the same fixture snapshot");
+function assertFinalRecordPeriod(proof: TxlineStatValidationProof) {
+  const periods = [proof.statA.statToProve.period, proof.statB?.statToProve.period];
+  if (periods.some((period) => period !== FINAL_RECORD_PERIOD)) {
+    throw new Error(`TxLINE proof is not from a final record (expected period ${FINAL_RECORD_PERIOD})`);
   }
 }
 
@@ -272,17 +226,6 @@ function extractMinTimestamp(proof: unknown) {
     throw new Error("TxLINE proof is missing summary.updateStats.minTimestamp");
   }
   return minTimestamp;
-}
-
-function extractStatValue(proof: unknown) {
-  const source = proofRecord(proof);
-  const statA = proofRecord(source.statA ?? source.stat_a);
-  const statToProve = proofRecord(statA.statToProve ?? statA.stat_to_prove);
-  const value = Number(statToProve.value);
-  if (!Number.isInteger(value)) {
-    throw new Error("TxLINE proof is missing statA.statToProve.value");
-  }
-  return value;
 }
 
 function proofRecord(value: unknown): Record<string, unknown> {

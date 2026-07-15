@@ -13,7 +13,7 @@ export default function PrivacyPage() {
         <h2>Minimize what you share</h2>
         <p>Do not place personal, financial, health, or other sensitive information in public inputs. Use a devnet wallet that is separate from any wallet holding assets of value.</p>
         <h2>Beta retention</h2>
-        <p>Beta records may be retained while the service is operated for security, integrity, and debugging. This notice will be replaced with counsel-approved production privacy terms before any non-test-token launch.</p>
+        <p>Beta records may be retained while the service is operated for security, integrity, and debugging. This notice will be replaced with counsel-approved production privacy terms before any non-devnet launch.</p>
       </section>
     </main>
   );

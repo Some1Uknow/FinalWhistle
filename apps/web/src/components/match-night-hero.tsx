@@ -17,7 +17,7 @@ export function MatchNightHero() {
       </div>
       <div className="hero-status" aria-label="Beta status">
         <span className="live-dot" aria-hidden="true" />
-        <div><strong>Devnet beta</strong><span>Test tokens only</span></div>
+        <div><strong>Devnet beta</strong><span>Devnet SOL only</span></div>
       </div>
     </section>
   );

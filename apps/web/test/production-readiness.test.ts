@@ -7,8 +7,7 @@ process.env.PUBLIC_ORIGIN = "https://beta.example.test";
 process.env.SOLANA_CLUSTER = "devnet";
 process.env.TXLINE_ENV = "devnet";
 process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
-process.env.ALLOWED_STAKE_MINTS = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
-process.env.TXLINE_FINALITY_STAT_KEY = "1";
+process.env.ALLOWED_STAKE_MINTS = "So11111111111111111111111111111111111111112";
 delete process.env.TXLINE_API_TOKEN;
 
 test("incomplete production configuration fails API writes closed instead of crashing module initialization", async () => {
@@ -32,6 +31,6 @@ test("pooled PostgreSQL URLs use explicit SSL hostname verification", async () =
 test("the public stake-token allowlist cannot advertise an unsupported mint", async () => {
   const { isSupportedDevnetStakeMint } = await import("../src/server/config");
 
-  assert.equal(isSupportedDevnetStakeMint("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"), true);
+  assert.equal(isSupportedDevnetStakeMint("So11111111111111111111111111111111111111112"), true);
   assert.equal(isSupportedDevnetStakeMint("11111111111111111111111111111111"), false);
 });

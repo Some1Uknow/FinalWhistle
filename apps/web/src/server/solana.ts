@@ -45,7 +45,6 @@ export type OnchainMarketState = {
 export type OnchainProgramConfig = {
   authority: string;
   txlineProgram: string;
-  finalityStatKey: number;
 };
 
 export type OnchainPositionState = {
@@ -137,9 +136,6 @@ export async function requireOnchainProgramConfig() {
   if (state.txlineProgram !== new PublicKey(config.txlineProgramId).toBase58()) {
     throw new Error("On-chain TxLINE program does not match server configuration");
   }
-  if (!config.txlineFinalityStatKey || state.finalityStatKey !== config.txlineFinalityStatKey) {
-    throw new Error("On-chain finality stat does not match server configuration");
-  }
   return state;
 }
 
@@ -159,7 +155,7 @@ export async function getStakeTokenMetadata() {
     }
     return {
       mint,
-      symbol: mint === "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" ? "USDC" : mint === "ELWTKspHKCnCfCiCiqYw1EDH77k8VCP74dK9qytG2Ujh" ? "USDT" : "TEST",
+      symbol: mint === "So11111111111111111111111111111111111111112" ? "SOL" : "TEST",
       decimals
     };
   }));
@@ -311,15 +307,13 @@ export function decodeMarketAccount(data: Buffer): OnchainMarketState {
 }
 
 export function decodeProgramConfigAccount(data: Buffer): OnchainProgramConfig {
-  if (data.length < 8 + 32 + 32 + 4 + 1) throw new Error("On-chain program configuration account is truncated");
+  if (data.length < 8 + 32 + 32 + 1) throw new Error("On-chain program configuration account is truncated");
   assertAccountDiscriminator(data, PROGRAM_CONFIG_ACCOUNT_DISCRIMINATOR, "program configuration");
   let offset = 8;
   const authority = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
   offset += 32;
   const txlineProgram = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
-  offset += 32;
-  const finalityStatKey = data.readUInt32LE(offset);
-  return { authority, txlineProgram, finalityStatKey };
+  return { authority, txlineProgram };
 }
 
 export function decodePositionAccount(data: Buffer): OnchainPositionState {

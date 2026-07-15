@@ -31,19 +31,11 @@ async function main() {
   const history = await txline.getHistorical(fixtureId);
   console.log(`Historical scores response: ${history ? "available" : "empty"}`);
 
-  if (config.txlineFinalityStatKey !== undefined) {
-    try {
-      const proof = await txline.getStatValidation({
-        fixtureId,
-        seq: "1",
-        statKey: config.txlineFinalityStatKey
-      });
-      console.log(`Stat-validation proof hash: ${proof.proofHash}`);
-    } catch (error) {
-      console.log(`Stat-validation proof unavailable for fixture ${fixtureId}: ${(error as Error).message}`);
-    }
-  } else {
-    console.log("TXLINE_FINALITY_STAT_KEY not set; proof fetch skipped.");
+  try {
+    const proof = await txline.getStatValidation({ fixtureId, seq: "1", statKey: 1 });
+    console.log(`Stat-validation proof hash: ${proof.proofHash}`);
+  } catch (error) {
+    console.log(`Stat-validation proof unavailable for fixture ${fixtureId}: ${(error as Error).message}`);
   }
 
   console.log(`Daily scores PDA sample: ${deriveDailyScoresPda(Date.now())}`);

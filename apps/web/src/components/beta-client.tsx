@@ -2,22 +2,27 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction } from "@solana/web3.js";
+import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { MarketRecord, MarketTemplate, Side } from "@/server/domain";
 import {
   buildCancelExpiredIx,
   buildClaimIx,
   buildCreateMarketIx,
+  buildEnsureAssociatedTokenAccountIx,
+  buildEnsureNativeSolAccountIx,
   buildJoinMarketIx,
   buildProofIx,
+  buildUnwrapNativeSolIx,
+  buildWrapNativeSolIxs,
+  NATIVE_MINT,
   type PublicConfig,
   type TxlineProofPayload
 } from "@/client/finalwhistle";
 import { BETA_TERMS_STORAGE_KEY, BETA_TERMS_VERSION } from "@/lib/legal";
 
-const DEVNET_USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
-const DEVNET_USDT = "ELWTKspHKCnCfCiCiqYw1EDH77k8VCP74dK9qytG2Ujh";
+const NATIVE_SOL_CREATE_BUFFER = 12_000_000n;
+const NATIVE_SOL_JOIN_BUFFER = 5_000_000n;
 const PENDING_INDEXING_STORAGE_KEY = "finalwhistle.pending-indexing.v1";
 const PENDING_INDEXING_EVENT = "finalwhistle:pending-indexing";
 
@@ -127,13 +132,12 @@ export function CreateMarketPanel({
   const [template, setTemplate] = useState<MarketTemplate>("TOTAL_GOALS_OVER_UNDER");
   const [threshold, setThreshold] = useState("2.5");
   const [lockMinutes, setLockMinutes] = useState("240");
-  const [tokenMint, setTokenMint] = useState("");
   const [side, setSide] = useState<Side>("YES");
   const [amount, setAmount] = useState("1");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Choose one outcome, then set your amount.");
 
-  const selectedMint = tokenMint || preferredMint(config);
+  const selectedMint = NATIVE_MINT.toBase58();
   const selectedToken = config?.stakeTokens.find((token) => token.mint === selectedMint);
 
   const refreshFixture = useCallback(async () => {
@@ -199,13 +203,21 @@ export function CreateMarketPanel({
         return;
       }
       const rawAmount = parseTokenAmount(amount, selectedToken.decimals);
+      await requireAvailableDevnetSol({
+        connection,
+        owner: wallet.publicKey,
+        amount: rawAmount,
+        setupBuffer: NATIVE_SOL_CREATE_BUFFER
+      });
       setStatus("Preparing your bet…");
       const programId = new PublicKey(config.programId);
-      const mint = new PublicKey(selectedMint);
+      const mint = NATIVE_MINT;
       const marketNonce = BigInt(Date.now());
       const lockTs = BigInt(Math.floor(Date.now() / 1000) + lockMinutesNumber * 60);
       const thresholdMilli = Math.round(Number(threshold) * 1000);
       const predicate = defaultPredicate(template, thresholdMilli);
+      const wrapped = buildWrapNativeSolIxs({ owner: wallet.publicKey, amount: rawAmount });
+      const closeWrappedAccount = await canCloseWrappedSolAccount(connection, wrapped.userTokenAccount);
       const built = buildCreateMarketIx({
         creator: wallet.publicKey,
         fixtureId,
@@ -222,10 +234,16 @@ export function CreateMarketPanel({
         side,
         amount: rawAmount,
         tokenMint: mint,
+        userTokenAccount: wrapped.userTokenAccount,
         escrowTokenAccount: built.escrowTokenAccount,
         programId
       });
-      const signature = await sendInstructions(connection, wallet, [built.instruction, initialPosition.instruction]);
+      const signature = await sendInstructions(connection, wallet, [
+        ...wrapped.instructions,
+        built.instruction,
+        initialPosition.instruction,
+        ...(closeWrappedAccount ? [buildUnwrapNativeSolIx({ owner: wallet.publicKey, account: wrapped.userTokenAccount })] : [])
+      ]);
       submittedSignature = signature;
       setStatus("Saving your bet…");
       const body = {
@@ -259,7 +277,7 @@ export function CreateMarketPanel({
     } finally {
       setBusy(false);
     }
-  }, [amount, config, connection, fixtureId, fixtureStale, fixtureStartsAt, lockMinutes, participant1, participant2, selectedMint, selectedToken, side, template, threshold, wallet]);
+  }, [amount, config, connection, fixtureId, fixtureStale, fixtureStartsAt, lockMinutes, participant1, participant2, selectedToken, side, template, threshold, wallet]);
 
   return (
     <section className="nb-card accent-orange">
@@ -293,12 +311,9 @@ export function CreateMarketPanel({
           <small>Betting must close before kickoff.</small>
         </div>
         <div className="field">
-          <label htmlFor="token-mint">Practice token</label>
-          <select id="token-mint" value={selectedMint} onChange={(event) => setTokenMint(event.target.value)}>
-            {(config?.allowedStakeMints ?? [DEVNET_USDC, DEVNET_USDT]).map((mint) => (
-              <option key={mint} value={mint}>{mintLabel(mint)}</option>
-            ))}
-          </select>
+          <label>Stake currency</label>
+          <div className="static-field">SOL · Devnet</div>
+          <small>Your wallet wraps SOL only while the bet is held, then unwraps any payout back to normal SOL.</small>
         </div>
         <fieldset className="field" disabled={busy}>
           <legend>Your prediction</legend>
@@ -314,9 +329,9 @@ export function CreateMarketPanel({
           </div>
         </fieldset>
         <div className="field">
-          <label htmlFor="creator-amount">Amount to put in</label>
+          <label htmlFor="creator-amount">Amount to put in (SOL)</label>
           <input id="creator-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} disabled={busy} />
-          <small>{selectedToken ? `${selectedToken.symbol} · Test balance` : "Token details are loading"}</small>
+          <small>{selectedToken ? "Uses your normal devnet SOL balance" : "SOL details are loading"}</small>
         </div>
         {!config?.programConfigReady && (
           <div className="help-box">
@@ -411,6 +426,10 @@ export function MarketActions({ market }: { market: MarketRecord }) {
       setStatus("This challenge's token isn't available right now.");
       return;
     }
+    if (market.tokenMint !== NATIVE_MINT.toBase58()) {
+      setStatus("This older challenge uses a retired test token and cannot accept new SOL picks.");
+      return;
+    }
     if (!allowedSides.includes(joinSide)) {
       setStatus("That side is already taken. Choose the open side to match the challenge.");
       return;
@@ -422,17 +441,30 @@ export function MarketActions({ market }: { market: MarketRecord }) {
     try {
       setBusy(true);
       const rawAmount = fixedRawAmount ? BigInt(fixedRawAmount) : parseTokenAmount(amount, token.decimals);
+      await requireAvailableDevnetSol({
+        connection,
+        owner: wallet.publicKey,
+        amount: rawAmount,
+        setupBuffer: NATIVE_SOL_JOIN_BUFFER
+      });
       setStatus(`Backing ${joinSide === "YES" ? choices.yes : choices.no}…`);
+      const wrapped = buildWrapNativeSolIxs({ owner: wallet.publicKey, amount: rawAmount });
+      const closeWrappedAccount = await canCloseWrappedSolAccount(connection, wrapped.userTokenAccount);
       const built = buildJoinMarketIx({
         user: wallet.publicKey,
         market: new PublicKey(market.marketPda),
         side: joinSide,
         amount: rawAmount,
-        tokenMint: new PublicKey(market.tokenMint),
+        tokenMint: NATIVE_MINT,
+        userTokenAccount: wrapped.userTokenAccount,
         escrowTokenAccount: new PublicKey(market.escrowTokenAccount),
         programId: new PublicKey(config.programId)
       });
-      const signature = await sendInstructions(connection, wallet, [built.instruction]);
+      const signature = await sendInstructions(connection, wallet, [
+        ...wrapped.instructions,
+        built.instruction,
+        ...(closeWrappedAccount ? [buildUnwrapNativeSolIx({ owner: wallet.publicKey, account: wrapped.userTokenAccount })] : [])
+      ]);
       submittedSignature = signature;
       const body = {
         userWallet: wallet.publicKey.toBase58(),
@@ -571,14 +603,24 @@ export function MarketActions({ market }: { market: MarketRecord }) {
     try {
       setBusy(true);
       setStatus("Collecting your result…");
+      const tokenMint = new PublicKey(market.tokenMint);
+      const isNativeSolMarket = tokenMint.equals(NATIVE_MINT);
+      const payoutAccount = isNativeSolMarket
+        ? buildEnsureNativeSolAccountIx(wallet.publicKey)
+        : buildEnsureAssociatedTokenAccountIx({ owner: wallet.publicKey, mint: tokenMint });
       const built = buildClaimIx({
         user: wallet.publicKey,
         market: new PublicKey(market.marketPda),
-        tokenMint: new PublicKey(market.tokenMint),
+        tokenMint,
+        userTokenAccount: payoutAccount.account,
         escrowTokenAccount: new PublicKey(market.escrowTokenAccount),
         programId: new PublicKey(config.programId)
       });
-      const signature = await sendInstructions(connection, wallet, [built.instruction]);
+      const signature = await sendInstructions(connection, wallet, [
+        payoutAccount.instruction,
+        built.instruction,
+        ...(isNativeSolMarket ? [buildUnwrapNativeSolIx({ owner: wallet.publicKey, account: payoutAccount.account })] : [])
+      ]);
       submittedSignature = signature;
       const { response, pendingIndexing } = await signedPost({
         route: "/api/markets/[marketId]/claim",
@@ -611,9 +653,9 @@ export function MarketActions({ market }: { market: MarketRecord }) {
       {isOpen ? (
         <>
           <div className="field">
-            <label htmlFor="amount">Your amount</label>
+            <label htmlFor="amount">Your amount (SOL)</label>
             <input id="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} disabled={busy || Boolean(fixedRawAmount)} />
-            <small>{token ? `${token.symbol} · Practice balance${fixedRawAmount ? " · amount set by the opening pick" : ""}` : "Token details are loading"}</small>
+            <small>{token ? `Uses your normal devnet SOL balance${fixedRawAmount ? " · amount set by the opening pick" : ""}` : "SOL details are loading"}</small>
           </div>
           {!config && <div className="action-state">{configStatus}. Try again in a moment.</div>}
         </>
@@ -981,14 +1023,41 @@ function defaultPredicate(template: MarketTemplate, thresholdMilli: number) {
   };
 }
 
-function preferredMint(config?: PublicConfig) {
-  return config?.allowedStakeMints.find((mint) => mint === DEVNET_USDC || mint === DEVNET_USDT) ?? config?.allowedStakeMints[0] ?? DEVNET_USDC;
+async function requireAvailableDevnetSol(input: {
+  connection: Connection;
+  owner: PublicKey;
+  amount: bigint;
+  setupBuffer: bigint;
+}) {
+  const available = BigInt(await input.connection.getBalance(input.owner, "confirmed"));
+  const required = input.amount + input.setupBuffer;
+  if (available < required) {
+    throw new Error(`You need at least ${formatLamports(required)} SOL for this amount and devnet account fees.`);
+  }
 }
 
-function mintLabel(mint: string) {
-  if (mint === DEVNET_USDC) return "USDC";
-  if (mint === DEVNET_USDT) return "USDT";
-  return truncate(mint);
+/** A newly-created or empty native account can be closed after its exact
+ * escrow transfer, immediately returning its rent reserve to normal SOL. If
+ * a wallet already keeps wrapped SOL there, leave it open rather than trying
+ * to convert an unrelated balance during a betting action. */
+async function canCloseWrappedSolAccount(connection: Connection, account: PublicKey) {
+  try {
+    const info = await connection.getAccountInfo(account, "confirmed");
+    if (!info) return true;
+    if (info.data.length < 72) return false;
+    const amount = new DataView(info.data.buffer, info.data.byteOffset + 64, 8).getBigUint64(0, true);
+    return amount === 0n;
+  } catch {
+    // Keep the account open when its state cannot be confirmed. The escrow
+    // transfer remains atomic and no SOL is lost; a later claim still unwraps.
+    return false;
+  }
+}
+
+function formatLamports(value: bigint) {
+  const whole = value / 1_000_000_000n;
+  const fraction = (value % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
 function explorerTx(signature: string) {

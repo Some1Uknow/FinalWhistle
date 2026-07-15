@@ -5,10 +5,6 @@ import { config, validateConfig } from "../src/server/config";
 
 validateConfig();
 
-if (!config.txlineFinalityStatKey) {
-  throw new Error("TXLINE_FINALITY_STAT_KEY must be configured before initializing ProgramConfig");
-}
-
 const keypairPath = process.env.FINAL_WHISTLE_UPGRADE_AUTHORITY_KEYPAIR;
 if (!keypairPath) {
   throw new Error("Set FINAL_WHISTLE_UPGRADE_AUTHORITY_KEYPAIR to the local upgrade-authority keypair path");
@@ -19,7 +15,6 @@ const programId = new PublicKey(config.programId);
 const built = buildInitializeConfigIx({
   authority: authority.publicKey,
   txlineProgram: new PublicKey(config.txlineProgramId),
-  finalityStatKey: config.txlineFinalityStatKey,
   programId
 });
 const transaction = new Transaction().add(built.instruction);

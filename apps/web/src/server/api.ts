@@ -166,7 +166,6 @@ export async function publicConfig() {
     allowedStakeMints: config.allowedStakeMints,
     stakeTokens,
     deploymentConfigured,
-    finalityConfigured: Boolean(config.txlineFinalityStatKey),
     programConfigReady,
     devnetTokenFaucetUrl: config.devnetTokenFaucetUrl
   });
@@ -377,7 +376,7 @@ export async function createMarket(request: Request) {
           instruction: "create_market_and_join_market",
           marketPda,
           marketNonce: body.marketNonce,
-          mode: "CLIENT_SIGNS_AND_ESCROWS_TEST_TOKENS"
+          mode: "CLIENT_SIGNS_AND_ESCROWS_DEVNET_SOL"
         }
       };
     }
@@ -450,7 +449,7 @@ export async function joinMarket(request: Request, params: { marketId: string })
         market: await getMarket(market.id, executor),
         onchain: {
           instruction: "join_market",
-          mode: "CLIENT_SIGNS_TOKEN_TRANSFER_TO_ESCROW"
+          mode: "CLIENT_SIGNS_DEVNET_SOL_TRANSFER_TO_ESCROW"
         }
       };
     }
@@ -468,7 +467,6 @@ export async function settlementProof(request: Request, params: { marketId: stri
   const body = seqProofSchema.parse(await request.json());
   await requireRateLimit({ scope: "proof", request, wallet: body.wallet });
   requireSignedRequest({ request, route: "/api/markets/[marketId]/settlement-proof", params, wallet: body.wallet, body });
-  if (!config.txlineFinalityStatKey) throw serviceUnavailable("TXLINE_FINALITY_STAT_KEY is required for settlement");
   await requireOnchainProgramConfig();
   const seq = await discoverFinalSequence(market.fixtureId, "settlement");
 
@@ -478,11 +476,6 @@ export async function settlementProof(request: Request, params: { marketId: stri
     statKey: market.predicate.statKey1,
     statKey2: market.predicate.statKey2
   });
-  const finalityProof = await txline.getStatValidation({
-    fixtureId: market.fixtureId,
-    seq,
-    statKey: config.txlineFinalityStatKey
-  });
   assertProofMatchesSettlement({
     proof: outcomeProof.raw,
     fixtureId: market.fixtureId,
@@ -490,21 +483,20 @@ export async function settlementProof(request: Request, params: { marketId: stri
     statKey1: market.predicate.statKey1,
     statKey2: market.predicate.statKey2
   });
-  assertProofMatchesSettlement({
-    proof: finalityProof.raw,
-    fixtureId: market.fixtureId,
-    seq,
-    statKey1: config.txlineFinalityStatKey
-  });
+  let settlement: ReturnType<typeof buildTxlineSettlementProofPayload>;
+  try {
+    settlement = buildTxlineSettlementProofPayload({
+      market,
+      seq,
+      outcomeProof: outcomeProof.raw
+    });
+  } catch (error) {
+    throw badRequest(error instanceof Error ? error.message : "TxLINE has not published a final proof for this fixture");
+  }
 
   return json({
     market,
-    settlement: buildTxlineSettlementProofPayload({
-      market,
-      seq,
-      outcomeProof: outcomeProof.raw,
-      finalityProof: finalityProof.raw
-    })
+    settlement
   });
 }
 
@@ -518,29 +510,34 @@ export async function cancellationProof(request: Request, params: { marketId: st
   const body = seqProofSchema.parse(await request.json());
   await requireRateLimit({ scope: "proof", request, wallet: body.wallet });
   requireSignedRequest({ request, route: "/api/markets/[marketId]/cancellation-proof", params, wallet: body.wallet, body });
-  if (!config.txlineFinalityStatKey) throw serviceUnavailable("TXLINE_FINALITY_STAT_KEY is required for cancellation");
   await requireOnchainProgramConfig();
   const seq = await discoverFinalSequence(market.fixtureId, "cancellation");
 
   const cancellationProof = await txline.getStatValidation({
     fixtureId: market.fixtureId,
     seq,
-    statKey: config.txlineFinalityStatKey
+    statKey: market.predicate.statKey1
   });
   assertProofMatchesSettlement({
     proof: cancellationProof.raw,
     fixtureId: market.fixtureId,
     seq,
-    statKey1: config.txlineFinalityStatKey
+    statKey1: market.predicate.statKey1
   });
-
-  return json({
-    market,
-    cancellation: buildTxlineCancellationProofPayload({
+  let cancellation: ReturnType<typeof buildTxlineCancellationProofPayload>;
+  try {
+    cancellation = buildTxlineCancellationProofPayload({
       market,
       seq,
       cancellationProof: cancellationProof.raw
-    })
+    });
+  } catch (error) {
+    throw badRequest(error instanceof Error ? error.message : "TxLINE has not published a cancellation proof for this fixture");
+  }
+
+  return json({
+    market,
+    cancellation
   });
 }
 

@@ -3,12 +3,11 @@ import { PublicKey } from "@solana/web3.js";
 
 export type TxlineEnvironment = "devnet";
 
-// These are the only legacy SPL mints accepted by the deployed program. Keep
-// the server-side allowlist a subset of this list so the UI never advertises a
-// token that the escrow instruction will reject on-chain.
+// The program accepts only wrapped native SOL. The browser wraps ordinary
+// devnet SOL atomically immediately before escrow, so users never need a
+// separate token faucet.
 export const SUPPORTED_DEVNET_STAKE_MINTS = [
-  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
-  "ELWTKspHKCnCfCiCiqYw1EDH77k8VCP74dK9qytG2Ujh"
+  "So11111111111111111111111111111111111111112"
 ] as const;
 
 export function isSupportedDevnetStakeMint(mint: string) {
@@ -41,7 +40,6 @@ export const config = {
   txlineProgramId:
     process.env.TXLINE_PROGRAM_ID ??
     "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J",
-  txlineFinalityStatKey: process.env.TXLINE_FINALITY_STAT_KEY ? Number(process.env.TXLINE_FINALITY_STAT_KEY) : undefined,
   allowedStakeMints: parseCsv(process.env.ALLOWED_STAKE_MINTS) ?? defaultAllowedStakeMints,
   devnetTokenFaucetUrl: process.env.DEVNET_TOKEN_FAUCET_URL ?? "",
   requireIdempotencyKeys: process.env.REQUIRE_IDEMPOTENCY_KEYS !== "false",
@@ -60,15 +58,6 @@ export function validateConfig() {
   const errors: string[] = [];
   if (config.txlineEnv !== "devnet") errors.push("FinalWhistle is devnet-only; set TXLINE_ENV=devnet");
   if (!Number.isFinite(config.port) || config.port <= 0) errors.push("PORT must be a positive number");
-  if (!Number.isInteger(config.txlineFinalityStatKey ?? 0)) {
-    errors.push("TXLINE_FINALITY_STAT_KEY must be an integer when provided");
-  }
-  if (config.txlineFinalityStatKey !== undefined && config.txlineFinalityStatKey <= 0) {
-    errors.push("TXLINE_FINALITY_STAT_KEY must be a positive integer");
-  }
-  if (config.txlineFinalityStatKey !== undefined && config.txlineFinalityStatKey > 0xffff_ffff) {
-    errors.push("TXLINE_FINALITY_STAT_KEY must fit in an unsigned 32-bit integer");
-  }
   for (const [name, value] of [
     ["FINAL_WHISTLE_PROGRAM_ID", config.programId],
     ["TXLINE_PROGRAM_ID", config.txlineProgramId]
@@ -130,7 +119,6 @@ export function validateConfig() {
     }
     if (!config.txlineApiToken) errors.push("TXLINE_API_TOKEN is required in production");
     if (!config.databaseUrl) errors.push("DATABASE_URL is required in production");
-    if (!config.txlineFinalityStatKey) errors.push("TXLINE_FINALITY_STAT_KEY is required in production");
     if (!process.env.ALLOWED_STAKE_MINTS) errors.push("ALLOWED_STAKE_MINTS must be explicitly set in production");
     if (!process.env.SOLANA_RPC_URL) errors.push("SOLANA_RPC_URL must be explicitly set in production");
     if (!config.requireIdempotencyKeys) errors.push("REQUIRE_IDEMPOTENCY_KEYS must not be disabled in production");

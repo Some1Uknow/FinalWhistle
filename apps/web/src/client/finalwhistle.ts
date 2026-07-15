@@ -14,7 +14,10 @@ import type { MarketRecord, MarketTemplate, Predicate, Side } from "@/server/dom
 // This removes an avoidable production dependency chain that includes an
 // unpatched bigint-buffer advisory.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+/** Legacy SPL wrapped-SOL mint. The app wraps ordinary SOL only for the
+ * duration required by the escrow program, then unwraps payouts back to SOL. */
+export const NATIVE_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 const BPF_LOADER_UPGRADEABLE_PROGRAM_ID = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
 export const FINAL_WHISTLE_INSTRUCTIONS = {
@@ -34,7 +37,6 @@ export type PublicConfig = {
   allowedStakeMints: string[];
   stakeTokens: Array<{ mint: string; symbol: string; decimals: number }>;
   deploymentConfigured: boolean;
-  finalityConfigured: boolean;
   programConfigReady: boolean;
   devnetTokenFaucetUrl: string;
 };
@@ -78,12 +80,94 @@ export function deriveAssociatedTokenAddress(mint: PublicKey, owner: PublicKey) 
   )[0];
 }
 
+/** Ensures the wallet has a canonical legacy-SPL associated token account for
+ * a mint. Claiming older markets still uses this helper, while new native-SOL
+ * markets use it as the first step of wrapping. */
+export function buildEnsureAssociatedTokenAccountIx(input: { owner: PublicKey; mint: PublicKey }) {
+  const account = deriveAssociatedTokenAddress(input.mint, input.owner);
+  return {
+    account,
+    instruction: createAssociatedTokenAccountIdempotentIx({
+      payer: input.owner,
+      owner: input.owner,
+      mint: input.mint,
+      account
+    })
+  };
+}
+
+/** Ensures the wallet has its canonical wrapped-SOL account without moving
+ * any SOL. This is used before a payout so the payout and unwrap can happen
+ * in one atomic wallet transaction. */
+export function buildEnsureNativeSolAccountIx(owner: PublicKey) {
+  return buildEnsureAssociatedTokenAccountIx({ owner, mint: NATIVE_MINT });
+}
+
+/** Creates the wallet's native SOL token account when needed, transfers normal
+ * SOL into it, and synchronizes the wrapped token balance. All instructions
+ * are sent atomically with the market action, so a failed bet cannot strand
+ * wrapped funds. */
+export function buildWrapNativeSolIxs(input: { owner: PublicKey; amount: bigint }) {
+  if (input.amount <= 0n) throw new Error("SOL amount must be positive");
+  const nativeAccount = buildEnsureNativeSolAccountIx(input.owner);
+  return {
+    userTokenAccount: nativeAccount.account,
+    instructions: [
+      nativeAccount.instruction,
+      new TransactionInstruction({
+        programId: SystemProgram.programId,
+        keys: [
+          { pubkey: input.owner, isSigner: true, isWritable: true },
+          { pubkey: nativeAccount.account, isSigner: false, isWritable: true }
+        ],
+        data: concat([u32(2), u64(input.amount)])
+      }),
+      new TransactionInstruction({
+        programId: TOKEN_PROGRAM_ID,
+        keys: [{ pubkey: nativeAccount.account, isSigner: false, isWritable: true }],
+        data: Buffer.from([17])
+      })
+    ]
+  };
+}
+
+/** Converts the entire wrapped-SOL token-account balance back to ordinary SOL.
+ * Claim calls this after the escrow transfer, returning both the payout and
+ * the account rent reserve to the user's wallet. */
+export function buildUnwrapNativeSolIx(input: { owner: PublicKey; account?: PublicKey }) {
+  const account = input.account ?? deriveAssociatedTokenAddress(NATIVE_MINT, input.owner);
+  return new TransactionInstruction({
+    programId: TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: account, isSigner: false, isWritable: true },
+      { pubkey: input.owner, isSigner: false, isWritable: true },
+      { pubkey: input.owner, isSigner: true, isWritable: false }
+    ],
+    data: Buffer.from([9])
+  });
+}
+
+function createAssociatedTokenAccountIdempotentIx(input: { payer: PublicKey; account: PublicKey; owner: PublicKey; mint: PublicKey }) {
+  return new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: input.payer, isSigner: true, isWritable: true },
+      { pubkey: input.account, isSigner: false, isWritable: true },
+      { pubkey: input.owner, isSigner: false, isWritable: false },
+      { pubkey: input.mint, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }
+    ],
+    // AssociatedTokenAccountInstruction.CreateIdempotent.
+    data: Buffer.from([1])
+  });
+}
+
 /** Administrative bootstrap instruction. This must be signed by the program's
  * upgrade authority and run once after deploying the hardened program. */
 export function buildInitializeConfigIx(input: {
   authority: PublicKey;
   txlineProgram: PublicKey;
-  finalityStatKey: number;
   programId: PublicKey;
 }) {
   const config = deriveProgramConfigPda(input.programId);
@@ -105,8 +189,7 @@ export function buildInitializeConfigIx(input: {
       ],
       data: concat([
         FINAL_WHISTLE_INSTRUCTIONS.initializeConfig,
-        input.txlineProgram.toBuffer(),
-        u32(input.finalityStatKey)
+        input.txlineProgram.toBuffer()
       ])
     })
   };
@@ -161,11 +244,12 @@ export function buildJoinMarketIx(input: {
   side: Side;
   amount: bigint;
   tokenMint: PublicKey;
+  userTokenAccount?: PublicKey;
   escrowTokenAccount: PublicKey;
   programId: PublicKey;
 }) {
   const position = derivePositionPda(input.market, input.user, input.programId);
-  const userTokenAccount = deriveAssociatedTokenAddress(input.tokenMint, input.user);
+  const userTokenAccount = input.userTokenAccount ?? deriveAssociatedTokenAddress(input.tokenMint, input.user);
   const data = concat([FINAL_WHISTLE_INSTRUCTIONS.joinMarket, side(input.side), u64(input.amount)]);
 
   return {
@@ -200,11 +284,12 @@ export function buildClaimIx(input: {
   user: PublicKey;
   market: PublicKey;
   tokenMint: PublicKey;
+  userTokenAccount?: PublicKey;
   escrowTokenAccount: PublicKey;
   programId: PublicKey;
 }) {
   const position = derivePositionPda(input.market, input.user, input.programId);
-  const userTokenAccount = deriveAssociatedTokenAddress(input.tokenMint, input.user);
+  const userTokenAccount = input.userTokenAccount ?? deriveAssociatedTokenAddress(input.tokenMint, input.user);
   return {
     position,
     instruction: new TransactionInstruction({
@@ -250,10 +335,7 @@ function settlementArgs(args: Record<string, unknown>) {
     u64(BigInt(String(args.seq))),
     u32(Number(args.statKey1)),
     option(args.statKey2 === undefined ? undefined : u32(Number(args.statKey2))),
-    txlineProof(args.outcomeProof as Record<string, unknown>),
-    txlineProof(args.finalityProof as Record<string, unknown>),
-    u32(Number(args.finalityStatKey)),
-    i32(Number(args.finalPhaseId))
+    txlineProof(args.outcomeProof as Record<string, unknown>)
   ]);
 }
 
@@ -262,7 +344,6 @@ function cancellationArgs(args: Record<string, unknown>) {
     i64(BigInt(String(args.fixtureId))),
     u64(BigInt(String(args.seq))),
     txlineProof(args.cancellationProof as Record<string, unknown>),
-    u32(Number(args.cancellationStatKey)),
     i32(Number(args.cancellationPhaseId))
   ]);
 }
