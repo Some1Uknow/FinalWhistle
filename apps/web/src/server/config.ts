@@ -152,6 +152,35 @@ export function validateConfig() {
   }
 }
 
+/**
+ * Fixture refresh is a read-and-cache path. It must remain available while
+ * settlement is intentionally disabled, but it still requires an activated
+ * TxLINE token and a database to write the verified feed into.
+ */
+export function validateFixtureFeedConfig() {
+  const errors: string[] = [];
+
+  if (config.txlineEnv !== "devnet") errors.push("FinalWhistle is devnet-only; set TXLINE_ENV=devnet");
+  if (config.solanaCluster !== "devnet") errors.push("FinalWhistle is devnet-only; set SOLANA_CLUSTER=devnet");
+  if (!config.txlineApiToken) errors.push("TXLINE_API_TOKEN is required to refresh fixtures");
+  if (!config.databaseUrl && process.env.FINAL_WHISTLE_DATABASE_MODE !== "memory") {
+    errors.push("DATABASE_URL is required to refresh fixtures");
+  }
+  if (!Number.isInteger(config.fixtureRefreshMinIntervalMs) || config.fixtureRefreshMinIntervalMs < 5_000) {
+    errors.push("FIXTURE_REFRESH_MIN_INTERVAL_MS must be an integer of at least 5000");
+  }
+  if (!Number.isInteger(config.upstreamTimeoutMs) || config.upstreamTimeoutMs < 1_000) {
+    errors.push("UPSTREAM_TIMEOUT_MS must be an integer of at least 1000");
+  }
+  if (!Number.isInteger(config.rateLimitMaxBuckets) || config.rateLimitMaxBuckets < 100) {
+    errors.push("RATE_LIMIT_MAX_BUCKETS must be an integer of at least 100");
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid fixture feed configuration:\n${errors.map((error) => `- ${error}`).join("\n")}`);
+  }
+}
+
 function parseCsv(value?: string) {
   if (!value) return undefined;
   return value

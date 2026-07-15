@@ -10,10 +10,13 @@ let guestSession: GuestSession | undefined;
 
 export class TxlineClient {
   async listFixtures(): Promise<unknown[]> {
-    const schedule = await this.requestJson<unknown>("/scores/schedule");
-    if (Array.isArray(schedule)) return schedule;
-    if (schedule && typeof schedule === "object") {
-      const payload = schedule as { fixtures?: unknown[]; data?: unknown[]; items?: unknown[] };
+    // TxLINE's current Devnet fixture feed lives under /fixtures. The former
+    // /scores/schedule route was removed, which made every refresh fail with a
+    // 404 even when the deployment had valid credentials.
+    const snapshot = await this.requestJson<unknown>("/fixtures/snapshot");
+    if (Array.isArray(snapshot)) return snapshot;
+    if (snapshot && typeof snapshot === "object") {
+      const payload = snapshot as { fixtures?: unknown[]; data?: unknown[]; items?: unknown[] };
       if (Array.isArray(payload.fixtures)) return payload.fixtures;
       if (Array.isArray(payload.data)) return payload.data;
       if (Array.isArray(payload.items)) return payload.items;

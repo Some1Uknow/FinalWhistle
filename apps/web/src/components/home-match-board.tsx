@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { FixtureRefreshPanel } from "@/components/beta-client";
 import { LiveFixtureBoard } from "@/components/live-fixture-board";
 import { MarketCard, SectionTag } from "@/components/nb";
 import { listAllMarkets, listFixtureViews } from "@/server/db";
@@ -11,12 +10,9 @@ export async function MatchDirectory() {
   return (
     <>
       <section className="directory-hero" aria-labelledby="matches-title">
-        <p className="eyebrow">Fixtures</p>
         <h1 id="matches-title">Matches</h1>
-        <p>Select a fixture to view or create a challenge.</p>
       </section>
       <section className="directory-content" aria-label="Available matches">
-        <FixtureRefreshPanel />
         <LiveFixtureBoard initialFixtures={fixtures} />
       </section>
     </>

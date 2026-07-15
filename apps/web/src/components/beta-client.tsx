@@ -111,11 +111,15 @@ function TermsConsent() {
 export function CreateMarketPanel({
   fixtureId,
   fixtureStale,
-  fixtureStartsAt
+  fixtureStartsAt,
+  participant1 = "Home team",
+  participant2 = "Away team"
 }: {
   fixtureId: string;
   fixtureStale?: boolean;
   fixtureStartsAt?: string;
+  participant1?: string;
+  participant2?: string;
 }) {
   const wallet = useWallet();
   const { connection } = useConnection();
@@ -127,7 +131,7 @@ export function CreateMarketPanel({
   const [side, setSide] = useState<Side>("YES");
   const [amount, setAmount] = useState("1");
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState("Choose the call you want to put to your friends.");
+  const [status, setStatus] = useState("Choose one outcome, then set your amount.");
 
   const selectedMint = tokenMint || preferredMint(config);
   const selectedToken = config?.stakeTokens.find((token) => token.mint === selectedMint);
@@ -156,7 +160,7 @@ export function CreateMarketPanel({
     if (!requireBetaTerms(setStatus)) return;
     if (!requireNoPendingIndexing(setStatus)) return;
     if (!config.programConfigReady) {
-      setStatus("Challenges aren't available right now. Please try again shortly.");
+      setStatus("Betting is not enabled yet. Please try again shortly.");
       return;
     }
     if (!selectedToken) {
@@ -169,7 +173,7 @@ export function CreateMarketPanel({
       const marketabilityResponse = await fetch(`/api/fixtures/${encodeURIComponent(fixtureId)}/marketability`);
       const marketability = await marketabilityResponse.json();
       if (!marketabilityResponse.ok || !marketability.marketable) {
-        setStatus(marketability.reason ?? "This match isn't ready for a challenge just yet.");
+        setStatus(marketability.reason ?? "This match is not ready for a bet yet.");
         return;
       }
       if (fixtureStale) {
@@ -195,7 +199,7 @@ export function CreateMarketPanel({
         return;
       }
       const rawAmount = parseTokenAmount(amount, selectedToken.decimals);
-      setStatus("Setting up your challenge…");
+      setStatus("Preparing your bet…");
       const programId = new PublicKey(config.programId);
       const mint = new PublicKey(selectedMint);
       const marketNonce = BigInt(Date.now());
@@ -223,7 +227,7 @@ export function CreateMarketPanel({
       });
       const signature = await sendInstructions(connection, wallet, [built.instruction, initialPosition.instruction]);
       submittedSignature = signature;
-      setStatus("Saving your call…");
+      setStatus("Saving your bet…");
       const body = {
         fixtureId,
         creator: wallet.publicKey.toBase58(),
@@ -243,50 +247,53 @@ export function CreateMarketPanel({
         wallet,
         body,
         programId: config.programId,
-        recovery: { label: "challenge", transactionSignature: signature }
+        recovery: { label: "bet", transactionSignature: signature }
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Create indexing failed");
       completePendingIndexing(pendingIndexing);
-      setStatus("Challenge created. Opening it now…");
+      setStatus("Bet created. Opening it now…");
       window.location.href = `/markets/${payload.market.id}`;
     } catch (error) {
       setStatus(errorMessage(error, submittedSignature));
     } finally {
       setBusy(false);
     }
-  }, [amount, config, connection, fixtureId, fixtureStale, fixtureStartsAt, lockMinutes, selectedMint, selectedToken, side, template, threshold, wallet]);
+  }, [amount, config, connection, fixtureId, fixtureStale, fixtureStartsAt, lockMinutes, participant1, participant2, selectedMint, selectedToken, side, template, threshold, wallet]);
 
   return (
     <section className="nb-card accent-orange">
-      <span className="tag">Make a challenge</span>
-      <h2>What are you calling?</h2>
+      <span className="tag">Place a bet</span>
+      <h2>Choose your prediction</h2>
+      <p className="panel-intro">Pick one outcome. Someone else takes the other side.</p>
       <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void create(); }}>
         {fixtureStale && (
           <div className="help-box">
-            <p>This match needs a fresh update before it can be used.</p>
-            <button className="nb-button" type="button" onClick={() => void refreshFixture()} disabled={busy}>Refresh match data</button>
+            <p>This match needs an update before you can bet.</p>
+            <button className="nb-button" type="button" onClick={() => void refreshFixture()} disabled={busy}>Refresh match</button>
           </div>
         )}
         <div className="field">
-          <label htmlFor="template">Your call</label>
+          <label htmlFor="template">Bet type</label>
           <select id="template" value={template} onChange={(event) => setTemplate(event.target.value as MarketTemplate)}>
-            <option value="MATCH_WINNER">Home side wins</option>
-            <option value="TOTAL_GOALS_OVER_UNDER">More goals than a target</option>
+            <option value="MATCH_WINNER">Who wins?</option>
+            <option value="TOTAL_GOALS_OVER_UNDER">Total goals</option>
           </select>
         </div>
         {template === "TOTAL_GOALS_OVER_UNDER" && (
           <div className="field">
-            <label htmlFor="threshold">Goal target</label>
+            <label htmlFor="threshold">Goal line</label>
             <input id="threshold" inputMode="decimal" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
+            <small>For example, 2.5 means 3 or more goals versus 2 or fewer.</small>
           </div>
         )}
         <div className="field">
-          <label htmlFor="lock-minutes">Close picks in</label>
+          <label htmlFor="lock-minutes">Bet closes in (minutes)</label>
           <input id="lock-minutes" inputMode="numeric" value={lockMinutes} onChange={(event) => setLockMinutes(event.target.value)} />
+          <small>Betting must close before kickoff.</small>
         </div>
         <div className="field">
-          <label htmlFor="token-mint">Token type</label>
+          <label htmlFor="token-mint">Practice token</label>
           <select id="token-mint" value={selectedMint} onChange={(event) => setTokenMint(event.target.value)}>
             {(config?.allowedStakeMints ?? [DEVNET_USDC, DEVNET_USDT]).map((mint) => (
               <option key={mint} value={mint}>{mintLabel(mint)}</option>
@@ -294,25 +301,31 @@ export function CreateMarketPanel({
           </select>
         </div>
         <fieldset className="field" disabled={busy}>
-          <legend>Your opening pick</legend>
+          <legend>Your prediction</legend>
           <div className="choice-grid action-grid">
-            <label><input type="radio" name="creator-side" checked={side === "YES"} onChange={() => setSide("YES")} /> Yes</label>
-            <label><input type="radio" name="creator-side" checked={side === "NO"} onChange={() => setSide("NO")} /> No</label>
+            <label>
+              <input type="radio" name="creator-side" checked={side === "YES"} onChange={() => setSide("YES")} />
+              {template === "MATCH_WINNER" ? `${participant1} wins` : `More than ${threshold} goals`}
+            </label>
+            <label>
+              <input type="radio" name="creator-side" checked={side === "NO"} onChange={() => setSide("NO")} />
+              {template === "MATCH_WINNER" ? `${participant2} wins or draw` : `${threshold} goals or fewer`}
+            </label>
           </div>
         </fieldset>
         <div className="field">
-          <label htmlFor="creator-amount">Your amount</label>
+          <label htmlFor="creator-amount">Amount to put in</label>
           <input id="creator-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} disabled={busy} />
-          <small>{selectedToken ? `${selectedToken.symbol} · Practice balance` : "Token details are loading"}</small>
+          <small>{selectedToken ? `${selectedToken.symbol} · Test balance` : "Token details are loading"}</small>
         </div>
         {!config?.programConfigReady && (
           <div className="help-box">
-            <p>{config ? "New challenges aren't available right now. You can still follow the match and check back soon." : `${configStatus}. Try again in a moment.`}</p>
+            <p>{config ? "Betting is not enabled yet. You can still follow the match and check back soon." : `${configStatus}. Try again in a moment.`}</p>
           </div>
         )}
         <TermsConsent />
         <button className="nb-button primary" type="submit" disabled={busy || !config?.programConfigReady || !selectedToken}>
-          {busy ? "Creating in your wallet…" : "Create challenge"}
+          {busy ? "Confirming in your wallet…" : "Create bet"}
         </button>
         <p className="muted" aria-live="polite">{status}</p>
         <PendingIndexingRecovery />
@@ -640,37 +653,6 @@ export function MarketActions({ market }: { market: MarketRecord }) {
       </details>
       <p className="muted" aria-live="polite">{status}</p>
       <PendingIndexingRecovery />
-    </div>
-  );
-}
-
-export function FixtureRefreshPanel() {
-  const [status, setStatus] = useState("Refresh the board when you want the latest match list.");
-  const refreshLive = useCallback(async () => {
-    setStatus("Checking the match board…");
-    try {
-      const response = await fetch("/api/fixtures");
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.message ?? "Fixture refresh failed");
-      const count = payload.fixtures?.length ?? 0;
-      setStatus(count ? `${count} ${count === 1 ? "match is" : "matches are"} ready to browse.` : "Nothing new just yet—check back for the next match.");
-      window.dispatchEvent(new Event("finalwhistle:fixtures-refreshed"));
-    } catch {
-      setStatus("The match board couldn't refresh just now. Try again in a moment.");
-    }
-  }, []);
-
-  return (
-    <div className="fixture-refresh">
-      <div>
-        <span className="tag">The match board</span>
-        <h3>Refresh fixtures</h3>
-        <p>Sync the current match list.</p>
-      </div>
-      <div className="fixture-refresh-actions">
-        <button className="nb-button primary" type="button" onClick={refreshLive}>Check for matches</button>
-      </div>
-      <p className="fixture-refresh-status" aria-live="polite">{status}</p>
     </div>
   );
 }

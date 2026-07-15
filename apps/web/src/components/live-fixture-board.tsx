@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
+import { CountryFlag } from "@/components/country-flag";
 import type { FixtureView } from "@/server/db";
 
 export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: FixtureView[] }) {
   const [fixtures, setFixtures] = useState(initialFixtures);
-  const [status, setStatus] = useState(initialFixtures.length ? "Fixtures available." : "Checking fixtures…");
+  const [status, setStatus] = useState(initialFixtures.length ? `${initialFixtures.length} fixtures available.` : "Loading matches…");
 
   const refresh = useCallback(async () => {
     try {
@@ -16,7 +17,7 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
       if (!response.ok) throw new Error(payload.message ?? "Fixtures are unavailable");
       setFixtures(payload.fixtures ?? []);
       const count = payload.fixtures?.length ?? 0;
-      setStatus(count ? `${count} ${count === 1 ? "fixture" : "fixtures"} available.` : "No fixtures available.");
+      setStatus(count ? `${count} ${count === 1 ? "fixture" : "fixtures"} available.` : "No upcoming matches in the feed.");
     } catch {
       setStatus("The match board couldn't refresh just now. Try again in a moment.");
     }
@@ -24,11 +25,8 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
 
   useEffect(() => {
     void refresh();
-    const onRefresh = () => void refresh();
-    window.addEventListener("finalwhistle:fixtures-refreshed", onRefresh);
     const interval = window.setInterval(() => void refresh(), 60_000);
     return () => {
-      window.removeEventListener("finalwhistle:fixtures-refreshed", onRefresh);
       window.clearInterval(interval);
     };
   }, [refresh]);
@@ -37,10 +35,12 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
     <section className="fixture-board" aria-labelledby="fixture-board-title">
       <div className="board-heading">
         <div>
-          <p className="eyebrow">Available</p>
-          <h3 id="fixture-board-title">Fixture list</h3>
+          <h2 id="fixture-board-title">Match board</h2>
         </div>
-        <span className="board-count">{fixtures.length} total</span>
+        <div className="fixture-board-actions">
+          <span className="board-count">{fixtures.length}</span>
+          <button className="nb-button" type="button" onClick={() => void refresh()}>Refresh</button>
+        </div>
       </div>
       <p className="board-status" aria-live="polite">{status}</p>
       {fixtures.length > 0 ? (
@@ -52,7 +52,7 @@ export function LiveFixtureBoard({ initialFixtures }: { initialFixtures: Fixture
           <span className="empty-ball" aria-hidden="true">⚽</span>
           <div>
             <h3>No fixtures available</h3>
-            <p>Refresh the match feed and try again.</p>
+            <p>Check again shortly.</p>
           </div>
         </div>
       )}
@@ -71,12 +71,12 @@ function LiveFixtureCard({ fixture }: { fixture: FixtureView }) {
       </div>
       <div className="match-teams">
         <div className="match-team">
-          <span className="club-initial club-initial-home">{initial(home)}</span>
+          <CountryFlag name={home} fallbackClassName="club-initial-home" />
           <strong>{home}</strong>
         </div>
         <span className="match-versus">vs</span>
         <div className="match-team">
-          <span className="club-initial club-initial-away">{initial(away)}</span>
+          <CountryFlag name={away} fallbackClassName="club-initial-away" />
           <strong>{away}</strong>
         </div>
       </div>
@@ -93,8 +93,4 @@ function formatKickoff(value?: string) {
   const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
   if (Number.isNaN(date.getTime())) return "Kickoff TBD";
   return new Intl.DateTimeFormat("en", { weekday: "short", hour: "2-digit", minute: "2-digit" }).format(date);
-}
-
-function initial(value: string) {
-  return value.trim().slice(0, 1).toUpperCase() || "?";
 }

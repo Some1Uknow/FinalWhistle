@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { MarketCard, SectionTag, StatusBadge } from "@/components/nb";
 import { CreateMarketPanel } from "@/components/beta-client";
+import { CountryFlag } from "@/components/country-flag";
 import { notFound } from "next/navigation";
 import { getFixtureView, listFixtureMarkets } from "@/server/db";
 
@@ -19,50 +20,88 @@ export default async function FixturePage({
   ]);
   if (!cached) notFound();
   const fixture = cached;
+  const home = fixture.participant1 ?? "Home team";
+  const away = fixture.participant2 ?? "Away team";
   return (
     <main className="page detail-page">
-      <Link className="inline-back" href="/matches">← Back to matches</Link>
-      <section className="section-head">
-        <div>
-          <SectionTag>Match center</SectionTag>
-          <h1>{fixture.name ?? `Fixture ${fixtureId}`}</h1>
+      <Link className="inline-back" href="/matches">← Matches</Link>
+      <section className="fixture-detail-hero" aria-labelledby="fixture-title">
+        <div className="fixture-detail-top">
+          <div>
+            <p className="eyebrow">{fixture.name ?? "Football match"}</p>
+            <h1 id="fixture-title">Make your pick</h1>
+          </div>
+          <StatusBadge stale={fixture.stale} />
         </div>
-        <StatusBadge stale={fixture.stale} />
+        <div className="fixture-teams" aria-label={`${home} versus ${away}`}>
+          <div className="fixture-team">
+            <CountryFlag name={home} fallbackClassName="club-initial-home" />
+            <strong>{home}</strong>
+          </div>
+          <span className="fixture-vs">vs</span>
+          <div className="fixture-team">
+            <CountryFlag name={away} fallbackClassName="club-initial-away" />
+            <strong>{away}</strong>
+          </div>
+        </div>
+        <div className="fixture-meta">
+          <span>Kickoff</span>
+          <strong>{formatKickoff(fixture.startsAt)}</strong>
+        </div>
+        <p className="fixture-guide">Choose one outcome, enter an amount, then confirm it in your wallet.</p>
       </section>
       <div className="detail-layout page-content-gap">
         <section>
-          <div className="nb-card accent-yellow">
-            <SectionTag>Match</SectionTag>
-            <h2>{fixture.participant1 ?? "Home"} vs {fixture.participant2 ?? "Away"}</h2>
-            <div className="metric-row">
-              <span>Challenge type</span>
-              <strong>Friendly match call</strong>
-            </div>
-            <div className="metric-row">
-              <span>Match status</span>
-              <strong>{fixture.stale ? "Checking for an update" : "Ready to call"}</strong>
-            </div>
-          </div>
           <div className="section-head">
-            <h2>Calls on this match</h2>
-            <SectionTag>{markets.length} on board</SectionTag>
+            <div>
+              <p className="eyebrow">Available bets</p>
+              <h2>Pick a market</h2>
+            </div>
+            <SectionTag>{markets.length} open</SectionTag>
           </div>
           <div className="grid">
             {markets.map((market) => (
-              <MarketCard key={market.id} market={market} fixtureName={fixture.name} stale={fixture.stale} />
+              <MarketCard
+                key={market.id}
+                market={market}
+                fixtureName={`${home} vs ${away}`}
+                participant1={home}
+                participant2={away}
+                stale={fixture.stale}
+              />
             ))}
           </div>
           {markets.length === 0 && (
             <div className="nb-card accent-cyan">
-              <SectionTag>Empty</SectionTag>
-              <h2>No challenges yet</h2>
+              <SectionTag>Nothing open</SectionTag>
+              <h2>No bets yet</h2>
+              <p className="muted">Create the first bet for this match.</p>
             </div>
           )}
         </section>
         <aside className="form-grid">
-          <CreateMarketPanel fixtureId={fixtureId} fixtureStale={fixture.stale} fixtureStartsAt={fixture.startsAt} />
+          <CreateMarketPanel
+            fixtureId={fixtureId}
+            fixtureStale={fixture.stale}
+            fixtureStartsAt={fixture.startsAt}
+            participant1={home}
+            participant2={away}
+          />
         </aside>
       </div>
     </main>
   );
+}
+
+function formatKickoff(value?: string) {
+  if (!value) return "Time to be confirmed";
+  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
+  if (Number.isNaN(date.getTime())) return "Time to be confirmed";
+  return new Intl.DateTimeFormat("en", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date);
 }

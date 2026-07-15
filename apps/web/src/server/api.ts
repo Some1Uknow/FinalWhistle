@@ -2,7 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import { randomUUID } from "node:crypto";
 import { z, ZodError } from "zod";
 import { verifySignedRequest } from "./auth";
-import { config, validateConfig } from "./config";
+import { config, validateConfig, validateFixtureFeedConfig } from "./config";
 import {
   defaultPredicateForTemplate,
   normalizeScoreEvent,
@@ -173,7 +173,7 @@ export async function publicConfig() {
 }
 
 export async function fixtures(request: Request) {
-  requireOperationalConfig();
+  requireFixtureFeedConfig();
   await requireRateLimit({ scope: "fixtures", request });
   const limit = readLimit(request);
   const refresh = await refreshFixtures();
@@ -187,7 +187,7 @@ export async function fixtures(request: Request) {
 }
 
 export async function fixtureMarkets(request: Request, params: { fixtureId: string }) {
-  requireOperationalConfig();
+  requireFixtureFeedConfig();
   await requireRateLimit({ scope: "fixtures", request });
   const limit = readLimit(request);
   return json({
@@ -1016,4 +1016,19 @@ function hasOperationalConfig() {
 
 function requireOperationalConfig() {
   if (!hasOperationalConfig()) throw serviceUnavailable("The beta deployment is not fully configured");
+}
+
+function hasFixtureFeedConfig() {
+  try {
+    validateFixtureFeedConfig();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function requireFixtureFeedConfig() {
+  if (!hasFixtureFeedConfig()) {
+    throw serviceUnavailable("The fixture feed is not configured");
+  }
 }

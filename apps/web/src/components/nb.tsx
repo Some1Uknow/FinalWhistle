@@ -14,17 +14,17 @@ export function StatusBadge({ status, stale }: { status?: string; stale?: boolea
   return <span className={`status ${state.toLowerCase()}`}>{label}</span>;
 }
 
-export function MarketCard({ market, fixtureName, stale }: { market: MarketRecord; fixtureName?: string; stale?: boolean }) {
-  const choices = marketChoices(market);
+export function MarketCard({ market, fixtureName, participant1, participant2, stale }: { market: MarketRecord; fixtureName?: string; participant1?: string; participant2?: string; stale?: boolean }) {
+  const choices = marketChoices(market, participant1, participant2);
 
   return (
     <article className="challenge-card">
       <div className="challenge-card-top">
-        <span className="challenge-type">{market.template === "MATCH_WINNER" ? "Winner call" : "Goals call"}</span>
+        <span className="challenge-type">{market.template === "MATCH_WINNER" ? "Match winner" : "Total goals"}</span>
         <StatusBadge status={market.status} stale={stale} />
       </div>
       <p className="challenge-match">{fixtureName ?? `Match ${market.fixtureId}`}</p>
-      <h3>{challengeQuestion(market)}</h3>
+      <h3>{challengeQuestion(market, participant1)}</h3>
       <div className="challenge-picks" aria-label="Available choices">
         <span>{choices.yes}</span>
         <i>or</i>
@@ -32,7 +32,7 @@ export function MarketCard({ market, fixtureName, stale }: { market: MarketRecor
       </div>
       <div className="challenge-card-footer">
         <span>{market.status === "OPEN" ? `Closes ${formatDate(market.lockTs)}` : formatDate(market.lockTs)}</span>
-        <Link href={`/markets/${market.id}`}>Open challenge <span aria-hidden="true">→</span></Link>
+        <Link href={`/markets/${market.id}`}>View bet <span aria-hidden="true">→</span></Link>
       </div>
     </article>
   );
@@ -92,16 +92,20 @@ export function truncate(value: string, chars = 4) {
   return value.length <= chars * 2 + 3 ? value : `${value.slice(0, chars)}...${value.slice(-chars)}`;
 }
 
-function marketChoices(market: MarketRecord) {
-  if (market.template === "MATCH_WINNER") return { yes: "Home side wins", no: "Home does not win" };
+function marketChoices(market: MarketRecord, participant1?: string, participant2?: string) {
+  if (market.template === "MATCH_WINNER") {
+    const home = participant1 ?? "Home team";
+    const away = participant2 ?? "Away team";
+    return { yes: `${home} wins`, no: `${away} wins or draw` };
+  }
   const line = (market.predicate.thresholdMilli / 1000).toLocaleString("en", { maximumFractionDigits: 2 });
-  return { yes: `Over ${line}`, no: `${line} or fewer` };
+  return { yes: `More than ${line} goals`, no: `${line} goals or fewer` };
 }
 
-function challengeQuestion(market: MarketRecord) {
-  if (market.template === "MATCH_WINNER") return "Will the home side win?";
+function challengeQuestion(market: MarketRecord, participant1?: string) {
+  if (market.template === "MATCH_WINNER") return `Will ${participant1 ?? "the home team"} win?`;
   const line = (market.predicate.thresholdMilli / 1000).toLocaleString("en", { maximumFractionDigits: 2 });
-  return `More than ${line} goals?`;
+  return `How many goals will there be? (${line} line)`;
 }
 
 function formatDate(value?: string) {

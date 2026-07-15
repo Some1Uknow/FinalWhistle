@@ -6,6 +6,7 @@ import { GeistMono } from "geist/font/mono";
 import { AppWalletButton } from "@/components/app-wallet";
 import { Providers } from "./providers";
 import "@solana/wallet-adapter-react-ui/styles.css";
+import "flag-icons/css/flag-icons.min.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
