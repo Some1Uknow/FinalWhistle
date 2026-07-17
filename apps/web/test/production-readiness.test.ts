@@ -34,3 +34,12 @@ test("the public stake-token allowlist cannot advertise an unsupported mint", as
   assert.equal(isSupportedDevnetStakeMint("So11111111111111111111111111111111111111112"), true);
   assert.equal(isSupportedDevnetStakeMint("11111111111111111111111111111111"), false);
 });
+
+test("PUBLIC_ORIGIN is limited to a bare web origin", async () => {
+  const { parsePublicOrigin } = await import("../src/lib/public-origin");
+
+  assert.equal(parsePublicOrigin("https://finalwhistle.raghav.codes/").origin, "https://finalwhistle.raghav.codes");
+  assert.throws(() => parsePublicOrigin("https://finalwhistle.raghav.codes/app"));
+  assert.throws(() => parsePublicOrigin("https://user:pass@finalwhistle.raghav.codes"));
+  assert.throws(() => parsePublicOrigin("ftp://finalwhistle.raghav.codes"));
+});

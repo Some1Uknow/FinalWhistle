@@ -126,8 +126,24 @@ The public beta is devnet-only and requires:
 - a pooled PostgreSQL `DATABASE_URL`;
 - `TXLINE_API_TOKEN` from secret storage and TxLINE;
 - `ALLOWED_STAKE_MINTS=So11111111111111111111111111111111111111112` for wrapped native SOL;
+- explicit HTTPS `SOLANA_RPC_URL` and matching `NEXT_PUBLIC_SOLANA_RPC_URL` values;
 - a deployed Anchor program with its immutable `ProgramConfig` initialized; and
 - `REQUIRE_IDEMPOTENCY_KEYS=true`.
+
+### Custom production domain cutover
+
+The browser uses only same-origin API routes and wallet signing does not bind to a website hostname, so moving the public hostname does not change market, database, or Solana state. `PUBLIC_ORIGIN` is the one authoritative web origin: it validates the production runtime configuration and produces the canonical URL in page metadata.
+
+When `finalwhistle.raghav.codes` is ready to become the production address:
+
+1. In the Vercel project, add `finalwhistle.raghav.codes` under **Settings → Domains**. Let Vercel show the exact DNS target for the domain.
+2. At the DNS provider for `raghav.codes`, create the CNAME record Vercel requests for the `finalwhistle` subdomain. Do not replace the apex-domain records. Wait until Vercel marks the domain as valid and its TLS certificate as issued.
+3. In **Settings → Environment Variables**, set `PUBLIC_ORIGIN=https://finalwhistle.raghav.codes` for **Production** only. It must be just the HTTPS origin—no trailing route, query string, or fragment. Keep preview deployments on their own existing origin/configuration.
+4. Redeploy the production branch. Vercel applies environment-variable changes only to new deployments.
+5. Verify `https://finalwhistle.raghav.codes/api/health` returns `200` with every dependency marked `ok`; then verify a wallet connection, fixture refresh, a signed devnet action, and the favicon in a fresh browser profile.
+6. After the custom domain passes those checks, configure the former `*.vercel.app` production domain to redirect to the custom domain in Vercel. Keep the old deployment available until the redirect and health check are confirmed.
+
+Use Vercel's domain inspection rather than guessing the DNS target; Vercel's required CNAME can vary by project and account setup. Vercel's current documentation covers [custom-domain setup](https://vercel.com/docs/domains/set-up-custom-domain) and [production environment variables](https://vercel.com/docs/environment-variables/managing-environment-variables).
 
 Run the database migration before deploying a schema change:
 

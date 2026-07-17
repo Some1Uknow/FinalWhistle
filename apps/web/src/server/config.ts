@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { PublicKey } from "@solana/web3.js";
+import { parsePublicOrigin } from "@/lib/public-origin";
 
 export type TxlineEnvironment = "devnet";
 
@@ -93,9 +94,9 @@ export function validateConfig() {
   let publicOrigin: URL | undefined;
   if (config.publicOrigin) {
     try {
-      publicOrigin = new URL(config.publicOrigin);
+      publicOrigin = parsePublicOrigin(config.publicOrigin);
     } catch {
-      errors.push("PUBLIC_ORIGIN must be an absolute URL");
+      errors.push("PUBLIC_ORIGIN must be an absolute HTTP(S) origin with no path, query, or fragment");
     }
   }
 

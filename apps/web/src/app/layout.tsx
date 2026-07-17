@@ -4,14 +4,40 @@ import { CircleDot } from "lucide-react";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { AppWalletButton } from "@/components/app-wallet";
+import { optionalPublicOrigin } from "@/lib/public-origin";
 import { Providers } from "./providers";
 import "@solana/wallet-adapter-react-ui/styles.css";
 import "flag-icons/css/flag-icons.min.css";
 import "./globals.css";
 
+const metadataBase = optionalPublicOrigin(process.env.PUBLIC_ORIGIN);
+
 export const metadata: Metadata = {
   title: "Final Whistle — Match-night challenges",
-  description: "A friendly place to pick a side, share the call, and follow the match through full time."
+  description: "A friendly place to pick a side, share the call, and follow the match through full time.",
+  ...(metadataBase
+    ? {
+        metadataBase,
+        alternates: { canonical: "/" }
+      }
+    : {}),
+  icons: {
+    icon: [
+      {
+        url: "/favicon.png",
+        type: "image/png",
+        sizes: "1254x1254"
+      }
+    ],
+    shortcut: "/favicon.png",
+    apple: [
+      {
+        url: "/favicon.png",
+        type: "image/png",
+        sizes: "1254x1254"
+      }
+    ]
+  }
 };
 
 export const dynamic = "force-dynamic";
