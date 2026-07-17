@@ -52,6 +52,25 @@ Copy `.env.example` to `.env` before adding a TxLINE token or changing the Solan
 
 ## Technical details
 
+For a concise TxLINE integration overview and exact endpoints, see [TxLINE in FinalWhistle](TXLINE-TECHNICAL-DOCUMENTATION.md).
+
+### How TxLINE powers the backend
+
+- Fetches real football fixtures for the match board.
+- Finds the final or cancelled match sequence from TxLINE history.
+- Requests a Merkle proof for the score stats used by a challenge.
+- Sends the proof to the Solana contract for TxLINE on-chain validation.
+- Settles a winner or enables refunds only after the proof is verified.
+- Cannot choose a winner or release escrow funds by itself.
+
+### TxLINE API feedback
+
+- **Liked:** Proof-backed match data makes settlement verifiable on-chain.
+- **Liked:** The backend does not need to be trusted to report the final score.
+- **Friction:** Devnet endpoints and response formats changed during integration.
+- **Friction:** Setup needs both a guest JWT and an activated API token.
+- **Friction:** TxLINE proofs need conversion into the Solana program's required format.
+
 ### Application structure
 
 - `apps/web` contains the Next.js App Router application, frontend pages, API routes, and the supported server runtime.
