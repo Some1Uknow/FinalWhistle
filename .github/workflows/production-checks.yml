@@ -56,9 +56,4 @@ jobs:
         run: cargo build-sbf --manifest-path programs/final_whistle/Cargo.toml
 
       - name: Public artifact scan
-        run: |
-          matches="$(git ls-files | grep -E '(^|/)(\.env|credentials\.json|service-account\.json)$|(^|/)[^/]*(\.db(-shm|-wal)?|keypair[^/]*\.json|\.pem|\.key|\.secret|\.p12|\.pfx)$' || true)"
-          if [ -n "$matches" ]; then
-            echo "$matches"
-            exit 1
-          fi
+        run: pnpm release:check

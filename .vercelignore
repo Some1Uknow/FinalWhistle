@@ -13,3 +13,6 @@ apps/web/.data/
 *.db-wal
 .env
 .env.*
+presentation/
+.superstack/
+docs/

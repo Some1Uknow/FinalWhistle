@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -20,6 +20,14 @@ import {
   type TxlineProofPayload
 } from "@/client/finalwhistle";
 import { BETA_TERMS_STORAGE_KEY, BETA_TERMS_VERSION } from "@/lib/legal";
+import {
+  DEFAULT_MARKET_CLOSE_BUFFER_MINUTES,
+  MAX_MARKET_CLOSE_BUFFER_MINUTES,
+  MAX_MARKET_OPEN_MINUTES,
+  MIN_MARKET_CLOSE_BUFFER_MINUTES,
+  resolveMarketTiming,
+  type MarketTiming
+} from "@/lib/market-timing";
 
 const NATIVE_SOL_CREATE_BUFFER = 12_000_000n;
 const NATIVE_SOL_JOIN_BUFFER = 5_000_000n;
@@ -131,14 +139,30 @@ export function CreateMarketPanel({
   const { config, status: configStatus } = usePublicConfig();
   const [template, setTemplate] = useState<MarketTemplate>("TOTAL_GOALS_OVER_UNDER");
   const [threshold, setThreshold] = useState("2.5");
-  const [lockMinutes, setLockMinutes] = useState("240");
+  const [lockMinutes, setLockMinutes] = useState(String(DEFAULT_MARKET_CLOSE_BUFFER_MINUTES));
   const [side, setSide] = useState<Side>("YES");
   const [amount, setAmount] = useState("1");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Choose one outcome, then set your amount.");
+  const [nowMs, setNowMs] = useState(0);
 
   const selectedMint = NATIVE_MINT.toBase58();
   const selectedToken = config?.stakeTokens.find((token) => token.mint === selectedMint);
+  const timing = useMemo(() => {
+    if (nowMs === 0) return undefined;
+    return resolveMarketTiming({
+      kickoffMs: fixtureTimestamp(fixtureStartsAt),
+      bufferMinutes: Number(lockMinutes),
+      nowMs
+    });
+  }, [fixtureStartsAt, lockMinutes, nowMs]);
+
+  useEffect(() => {
+    const updateNow = () => setNowMs(Date.now());
+    updateNow();
+    const interval = window.setInterval(updateNow, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const refreshFixture = useCallback(async () => {
     try {
@@ -185,17 +209,12 @@ export function CreateMarketPanel({
         return;
       }
       const lockMinutesNumber = Number(lockMinutes);
-      if (!Number.isInteger(lockMinutesNumber) || lockMinutesNumber < 5 || lockMinutesNumber > 1_440) {
-        setStatus("Choose a join window between 5 minutes and 24 hours.");
-        return;
-      }
-      const kickoffTs = fixtureTimestamp(fixtureStartsAt);
-      if (!Number.isFinite(kickoffTs) || kickoffTs <= Date.now()) {
-        setStatus("This fixture is no longer available for a new challenge.");
-        return;
-      }
-      if (Date.now() + lockMinutesNumber * 60_000 >= kickoffTs) {
-        setStatus("Close picks before kickoff. Choose a shorter join window.");
+      const latestTiming = resolveMarketTiming({
+        kickoffMs: fixtureTimestamp(fixtureStartsAt),
+        bufferMinutes: lockMinutesNumber
+      });
+      if (latestTiming.status !== "ready") {
+        setStatus(marketTimingMessage(latestTiming, lockMinutesNumber));
         return;
       }
       if (template === "TOTAL_GOALS_OVER_UNDER" && (!Number.isFinite(Number(threshold)) || Number(threshold) < 0.5 || Number(threshold) > 8.5 || Number(threshold) % 1 !== 0.5)) {
@@ -213,7 +232,7 @@ export function CreateMarketPanel({
       const programId = new PublicKey(config.programId);
       const mint = NATIVE_MINT;
       const marketNonce = BigInt(Date.now());
-      const lockTs = BigInt(Math.floor(Date.now() / 1000) + lockMinutesNumber * 60);
+      const lockTs = BigInt(latestTiming.lockTimeMs / 1_000);
       const thresholdMilli = Math.round(Number(threshold) * 1000);
       const predicate = defaultPredicate(template, thresholdMilli);
       const wrapped = buildWrapNativeSolIxs({ owner: wallet.publicKey, amount: rawAmount });
@@ -252,6 +271,7 @@ export function CreateMarketPanel({
         marketNonce: marketNonce.toString(),
         template,
         lockTs: new Date(Number(lockTs) * 1000).toISOString(),
+        closeBufferMinutes: lockMinutesNumber,
         tokenMint: mint.toBase58(),
         escrowTokenAccount: built.escrowTokenAccount.toBase58(),
         thresholdMilli: template === "TOTAL_GOALS_OVER_UNDER" ? thresholdMilli : undefined,
@@ -306,9 +326,9 @@ export function CreateMarketPanel({
           </div>
         )}
         <div className="field">
-          <label htmlFor="lock-minutes">Bet closes in (minutes)</label>
-          <input id="lock-minutes" inputMode="numeric" value={lockMinutes} onChange={(event) => setLockMinutes(event.target.value)} />
-          <small>Betting must close before kickoff.</small>
+          <label htmlFor="lock-minutes">Betting closes before kickoff (minutes)</label>
+          <input id="lock-minutes" inputMode="numeric" value={lockMinutes} onChange={(event) => setLockMinutes(event.target.value)} disabled={busy} />
+          <small aria-live="polite">{timing ? marketTimingMessage(timing, Number(lockMinutes)) : "Calculating the closing time…"}</small>
         </div>
         <div className="field">
           <label>Stake currency</label>
@@ -339,7 +359,7 @@ export function CreateMarketPanel({
           </div>
         )}
         <TermsConsent />
-        <button className="nb-button primary" type="submit" disabled={busy || !config?.programConfigReady || !selectedToken}>
+        <button className="nb-button primary" type="submit" disabled={busy || !config?.programConfigReady || !selectedToken || timing?.status !== "ready"}>
           {busy ? "Confirming in your wallet…" : "Create bet"}
         </button>
         <p className="muted" aria-live="polite">{status}</p>
@@ -1106,6 +1126,35 @@ function fixtureTimestamp(value?: string) {
   }
   const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`;
   return Date.parse(normalized);
+}
+
+function marketTimingMessage(timing: MarketTiming, bufferMinutes?: number) {
+  switch (timing.status) {
+    case "ready":
+      return `Closes ${formatMarketTime(timing.lockTimeMs)} (${bufferMinutes} minutes before kickoff).`;
+    case "too_early":
+      return `Closes ${formatMarketTime(timing.lockTimeMs)}. You can create this bet from ${formatMarketTime(timing.availableAtMs)} because bets can stay open for up to ${MAX_MARKET_OPEN_MINUTES / 60} hours.`;
+    case "close_passed":
+      return "That closing time has passed. Choose fewer minutes before kickoff.";
+    case "betting_closed":
+      return `Betting is closed because kickoff is ${MIN_MARKET_CLOSE_BUFFER_MINUTES} minutes or less away.`;
+    case "fixture_started":
+      return "This fixture is no longer available for a new challenge.";
+    case "invalid_buffer":
+      return `Choose a whole number from ${MIN_MARKET_CLOSE_BUFFER_MINUTES} to ${MAX_MARKET_CLOSE_BUFFER_MINUTES} minutes.`;
+    case "invalid_kickoff":
+      return "The fixture kickoff time is unavailable.";
+  }
+}
+
+function formatMarketTime(timestampMs: number) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short"
+  }).format(new Date(timestampMs));
 }
 
 function hasReachedTime(value?: string, currentTime = Date.now()) {

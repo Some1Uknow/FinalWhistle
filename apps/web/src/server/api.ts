@@ -2,6 +2,13 @@ import { PublicKey } from "@solana/web3.js";
 import { randomUUID } from "node:crypto";
 import { z, ZodError } from "zod";
 import { verifySignedRequest } from "./auth";
+import {
+  MAX_MARKET_CLOSE_BUFFER_MINUTES,
+  MAX_MARKET_OPEN_MINUTES,
+  MIN_MARKET_CLOSE_BUFFER_MINUTES,
+  validateRequestedMarketLock,
+  type MarketLockValidation
+} from "@/lib/market-timing";
 import { config, validateConfig, validateFixtureFeedConfig } from "./config";
 import {
   defaultPredicateForTemplate,
@@ -71,6 +78,7 @@ const createMarketSchema = z.object({
   marketNonce: z.string().regex(/^\d+$/),
   template: z.enum(["MATCH_WINNER", "TOTAL_GOALS_OVER_UNDER"]),
   lockTs: z.string().datetime(),
+  closeBufferMinutes: z.number().int().min(MIN_MARKET_CLOSE_BUFFER_MINUTES).max(MAX_MARKET_CLOSE_BUFFER_MINUTES).optional(),
   tokenMint: solanaPublicKeySchema,
   escrowTokenAccount: solanaPublicKeySchema,
   thresholdMilli: z.number().int().optional(),
@@ -292,12 +300,14 @@ export async function createMarket(request: Request) {
   const lockTimestampMs = Date.parse(body.lockTs);
   if (!Number.isFinite(lockTimestampMs)) throw badRequest("Lock time must be a valid timestamp");
   const lockTs = BigInt(Math.floor(lockTimestampMs / 1000));
-  const nowSeconds = Math.floor(Date.now() / 1000);
   const kickoffMs = Date.parse(fixture.startsAt ?? "");
   if (!Number.isFinite(kickoffMs)) throw badRequest("Fixture kickoff time is unavailable; it cannot be used for a market");
-  const kickoffSeconds = Math.floor(kickoffMs / 1000);
-  if (kickoffSeconds <= nowSeconds) throw badRequest("Fixture has already started and cannot be used for a market");
-  if (lockTs >= BigInt(kickoffSeconds)) throw badRequest("Lock time must be before fixture kickoff");
+  const lockValidation = validateRequestedMarketLock({
+    kickoffMs,
+    lockTimeMs: Number(lockTs) * 1_000,
+    expectedBufferMinutes: body.closeBufferMinutes
+  });
+  if (!lockValidation.ok) throw badRequest(marketLockValidationMessage(lockValidation.reason));
   const canonicalLockTs = new Date(Number(lockTs) * 1000).toISOString();
   const marketPda = deriveMarketPda({
     creator: body.creator,
@@ -988,6 +998,23 @@ function redactPrivateFields(value: unknown): unknown {
       .filter(([key]) => key !== "rawProof" && key !== "raw_proof_json")
       .map(([key, entry]) => [key, redactPrivateFields(entry)])
   );
+}
+
+function marketLockValidationMessage(reason: Extract<MarketLockValidation, { ok: false }>["reason"]) {
+  switch (reason) {
+    case "invalid_timestamp":
+      return "Lock time must be a valid timestamp";
+    case "fixture_started":
+      return "Fixture has already started and cannot be used for a market";
+    case "lock_not_future":
+      return "Lock time must be in the future";
+    case "lock_not_before_kickoff":
+      return "Lock time must be before fixture kickoff";
+    case "invalid_buffer":
+      return `Lock time must be between ${MIN_MARKET_CLOSE_BUFFER_MINUTES} and ${MAX_MARKET_CLOSE_BUFFER_MINUTES} minutes before fixture kickoff`;
+    case "market_open_too_long":
+      return `Markets can remain open for at most ${MAX_MARKET_OPEN_MINUTES / 60} hours`;
+  }
 }
 
 function badRequest(message: string) {
