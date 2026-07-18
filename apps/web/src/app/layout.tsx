@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
-import { CircleDot } from "lucide-react";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { AppWalletButton } from "@/components/app-wallet";
+import { SiteFooter } from "@/components/site-footer";
 import { optionalPublicOrigin } from "@/lib/public-origin";
 import { Providers } from "./providers";
 import "@solana/wallet-adapter-react-ui/styles.css";
@@ -13,8 +14,8 @@ import "./globals.css";
 const metadataBase = optionalPublicOrigin(process.env.PUBLIC_ORIGIN);
 
 export const metadata: Metadata = {
-  title: "Final Whistle — Match-night challenges",
-  description: "A friendly place to pick a side, share the call, and follow the match through full time.",
+  title: "Final Whistle — Head-to-head football predictions",
+  description: "Pick a football result, match the same amount against someone on the opposite side, and let the verified score decide the winner.",
   ...(metadataBase
     ? {
         metadataBase,
@@ -50,8 +51,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Providers>
             <header className="topbar">
               <Link className="brand" href="/">
-                <span className="brand-mark"><CircleDot size={22} aria-hidden="true" /></span>
-                <span>Final Whistle</span>
+                <Image className="brand-logo" src="/favicon.png" alt="" width={28} height={28} priority />
+                <span>Final</span><strong>Whistle</strong>
               </Link>
               <nav className="nav" aria-label="Primary">
                 <Link href="/matches">Matches</Link>
@@ -61,12 +62,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <AppWalletButton />
             </header>
             {children}
-            <footer className="site-footer">
-              <span className="footer-note">Devnet beta · Devnet SOL has no cash value</span>
-              <span className="footer-links">
-                <Link href="/how-it-works">How it works</Link> · <Link href="/eligibility">Eligibility</Link> · <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
-              </span>
-            </footer>
+            <SiteFooter />
           </Providers>
         </div>
       </body>
