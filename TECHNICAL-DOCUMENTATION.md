@@ -18,11 +18,9 @@ TxLINE is not used as a simple score feed that the server blindly trusts. It is 
 
 In simple words: **TxLINE proves what happened; the smart contract decides whether that proof can settle the challenge.** The backend prepares the request, but it cannot choose a winner or move escrow funds by itself.
 
-## Business positioning
+## Business model
 
-Polymarket and Kalshi are built primarily for trading event contracts: users navigate an order book, buy or sell Yes/No positions, and read contract prices as implied probabilities. See the [Polymarket order-book documentation](https://docs.polymarket.com/concepts/prices-orderbook) and [Kalshi order-book documentation](https://help.kalshi.com/en/articles/13823828-the-orderbook).
-
-FinalWhistle is a football-first social challenge rather than a general prediction exchange. A user makes one clear call, another wallet takes the opposite side, both commit the same amount, and a proof-backed final result settles the pot. There is no probability price, spread, or trading position to manage. The product does not compete with Polymarket or Kalshi on market breadth or liquidity; its wedge is the simpler match-night interaction: **pick a side, call someone out, and let the verified result settle the argument.**
+Subject to legal and compliance review, FinalWhistle will take a transparent 2–5% fee from the winner's payout after a successful settlement — a win-win model where users pay only when they win.
 
 ## Technical and business highlights
 
