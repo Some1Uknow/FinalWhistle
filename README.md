@@ -52,7 +52,7 @@ Copy `.env.example` to `.env` before adding a TxLINE token or changing the Solan
 
 ## Technical details
 
-For a brief project and TxLINE overview, see [Technical Documentation](TECHNICAL-DOCUMENTATION.md).
+For a concise TxLINE integration overview and exact endpoints, see [Technical Documentation](TECHNICAL-DOCUMENTATION.md).
 
 ### How TxLINE powers the backend
 
